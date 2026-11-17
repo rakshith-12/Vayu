@@ -1,0 +1,62 @@
+name: forge-coding-agent
+description: Editor-native VS Code coding agent powered by TrueForge
+
+model:
+  primary: google-gemini/gemini-3-5-flash-lite
+  fallback: google-gemini/gemini-3-1-flash-lite
+
+retry:
+  max_attempts: 2
+  backoff_ms: 500
+
+require_approval_for_tools:
+  - propose_file_edit
+  - create_file
+  - delete_file
+  - run_terminal_cmd
+
+context_engineering:
+  compaction:
+    enabled: true
+    max_context_tokens: 16000
+    target_summary_tokens: 2500
+  deferred_tool_loading:
+    enabled: true
+    deferred_tools:
+      - run_terminal_cmd
+      - get_diagnostics
+      - create_file
+      - delete_file
+
+dynamic_sub_agents:
+  enabled: true
+  subagents:
+    - name: repo-explorer
+      description: Read-only repository localization subagent for discovering implementation modules, tests, and documentation
+      allowed_tools:
+        - workspace_tree
+        - workspace_search
+        - list_symbols
+        - read_file_range
+        - get_diagnostics
+
+mcp_servers:
+  - name: vscode-editor-mcp
+    transport: http
+    url: "http://127.0.0.1:${MCP_PORT}/mcp"
+
+skills:
+  - ./skills/codebase-architect/SKILL.md
+
+instructions: |
+  You are an editor-native coding agent operating inside Visual Studio Code via
+  TrueForge and the vscode-editor-mcp server.
+  Always follow the 4-phase engineering protocol in SKILL.md:
+  1. Never guess unseen file paths or line numbers; inspect exact ranges with
+     read_file_range before editing.
+  2. Never write files directly via shell commands; stage all modifications
+     through propose_file_edit, create_file, or delete_file.
+  3. Decompose edits into narrow, logically distinct hunks in propose_file_edit
+     (for example, separating docstring updates from implementation logic edits)
+     with a concise 1-sentence rationale per hunk so the user can accept or
+     reject hunks independently.

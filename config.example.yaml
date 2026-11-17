@@ -1,0 +1,13 @@
+# Copy to config.yaml and set environment variables before starting TrueForge.
+# NEVER commit real API keys to git.
+models:
+  primary-coding-model:
+    provider: openai-compatible
+    base_url: "${PRIMARY_MODEL_BASE_URL}"
+    api_key: "${PRIMARY_MODEL_API_KEY}"
+    model: "${PRIMARY_MODEL_NAME}"
+  secondary-fallback-model:
+    provider: openai-compatible
+    base_url: "${FALLBACK_MODEL_BASE_URL}"
+    api_key: "${FALLBACK_MODEL_API_KEY}"
+    model: "${FALLBACK_MODEL_NAME}"

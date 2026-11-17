@@ -1,0 +1,138 @@
+{
+  "name": "forge-vscode-agent",
+  "displayName": "TrueForge Coding Agent",
+  "description": "Editor-native VS Code coding agent powered by TrueForge",
+  "version": "1.0.0",
+  "publisher": "trueforge-team",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trueforge-team/forge-vscode-agent"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "trueforge-sidebar",
+          "title": "TrueForge Agent",
+          "icon": "media/forge-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "trueforge-sidebar": [
+        {
+          "type": "webview",
+          "id": "trueforge.agentPanel",
+          "name": "Agent & Context Ledger"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "trueforge.inlineEdit",
+        "title": "Forge: Inline Edit Selection"
+      },
+      {
+        "command": "trueforge.switchActiveModel",
+        "title": "Forge: Switch Active Model"
+      },
+      {
+        "command": "trueforge.stopGeneration",
+        "title": "Forge: Stop Active Generation"
+      },
+      {
+        "command": "trueforge.undoLastTurn",
+        "title": "Forge: Undo Last Agent Change"
+      },
+      {
+        "command": "trueforge.acceptHunk",
+        "title": "Accept Hunk"
+      },
+      {
+        "command": "trueforge.rejectHunk",
+        "title": "Reject Hunk"
+      },
+      {
+        "command": "trueforge.acceptFile",
+        "title": "Accept All Hunks in File"
+      },
+      {
+        "command": "trueforge.rejectFile",
+        "title": "Reject All Hunks in File"
+      },
+      {
+        "command": "trueforge.toggleNativeDiff",
+        "title": "Toggle Side-by-Side Diff"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "trueforge.inlineEdit",
+        "key": "ctrl+k",
+        "mac": "cmd+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "trueforge.inlineEdit",
+        "key": "ctrl+shift+k",
+        "mac": "cmd+shift+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "trueforge.stopGeneration",
+        "key": "escape",
+        "when": "trueforge.isGenerating"
+      }
+    ],
+    "configuration": {
+      "title": "TrueForge Coding Agent",
+      "properties": {
+        "trueforge.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:3000",
+          "description": "URL of the TrueForge local server"
+        },
+        "trueforge.primaryModel": {
+          "type": "string",
+          "default": "primary-coding-model",
+          "description": "Primary model identifier configured in TrueForge"
+        },
+        "trueforge.fallbackModel": {
+          "type": "string",
+          "default": "secondary-fallback-model",
+          "description": "Fallback model identifier for automatic failover"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/run-tests.mjs",
+    "build:webview": "cd src/webview/ui && npx vite build",
+    "package": "vsce package --no-dependencies --allow-missing-repository"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "eventsource-parser": "^3.0.0",
+    "ignore": "^7.0.0",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^4.1.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}
