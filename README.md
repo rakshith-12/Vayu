@@ -6,7 +6,7 @@ Provides non-destructive inline editing (`Ctrl+K`), multi-file agent context ret
 
 ---
 
-## 🚀 60-Second Quickstart (For Your Friends)
+## 🚀 60-Second Quickstart
 
 No build tools needed! You can install and run this immediately.
 
