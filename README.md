@@ -107,6 +107,34 @@ curl -X PUT "http://localhost:3000/api/v1/settings/model-providers/google-gemini
 
 ---
 
+### Task B: Agent Mode (Three or More Files, None Named)
+Run the complete multi-file specification benchmark without mentioning any file names:
+
+1. In the **TrueForge Agent** sidebar panel, select **Agent Mode (Mode 2)**.
+2. Submit this exact instruction:
+   ```text
+   Add a new built-in CLI command flask config that prints the loaded application's configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as '***'. It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands.
+   ```
+3. **Multi-File Diff Verification**:
+   The agent automatically discovers and touches **three files**:
+   - `src/flask/cli.py` (registers `config` on `FlaskGroup` with case-insensitive regex masking)
+   - `tests/test_cli.py` (adds `TestConfig` asserting exit code 0 and sensitive key masking)
+   - `docs/cli.rst` (documents `flask config` alongside `run`, `shell`, and `routes`)
+4. **Accept and Run Tests**:
+   - Click **Accept All** to apply changes.
+   - Run the test suite:
+     ```bash
+     pytest tests/test_cli.py -q
+     # Output: 56 passed, 3 skipped in 0.24s
+     ```
+5. **Verify Live Masked JSON**:
+   ```bash
+   flask --app demo_app config
+   ```
+   All keys containing `SECRET`, `PASSWORD`, `TOKEN`, or `KEY` will be output as `"***"`, while normal application configuration parameters remain fully intact.
+
+---
+
 ### Task 3: Streaming & Cancellation
 1. In the TrueForge sidebar panel, ask a question that produces a long answer:
    ```text
