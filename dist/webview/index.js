@@ -180,6 +180,7 @@
       return;
     }
     diffCard.style.display = "block";
+    diffCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
     const filename = activeReview.filePath.split(/[/\\]/).pop() || activeReview.filePath;
     reviewTitle.textContent = `${filename}${queuedCount > 0 ? ` (+${queuedCount} queued)` : ""}`;
     hunksList.innerHTML = activeReview.hunks.map((hunk) => {

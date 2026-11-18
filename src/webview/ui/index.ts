@@ -236,6 +236,7 @@ function updateDiffQueue(activeReview: StagedFileReview | null, queuedCount: num
   }
 
   diffCard.style.display = 'block';
+  diffCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   const filename = activeReview.filePath.split(/[/\\]/).pop() || activeReview.filePath;
   reviewTitle.textContent = `${filename}${queuedCount > 0 ? ` (+${queuedCount} queued)` : ''}`;
 

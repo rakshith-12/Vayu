@@ -127,11 +127,47 @@ export async function activate(context: vscode.ExtensionContext) {
             .join('\n\n');
           assembledPrompt = `${prompt}\n\nRelevant Codebase Context:\n${contextBlock}`;
         }
+
+        systemDirective = `You are TrueForge Coding Agent operating in Mode 2 (Agent Mode).
+You must implement the requested feature across all relevant files in the codebase.
+CRITICAL FORMATTING INSTRUCTIONS:
+1. Touch all required files (including implementation, tests, and documentation).
+2. Do NOT output whole files. Output ONLY the concise new code snippet/function for each file.
+3. Do NOT output conversational filler, internal monologues, or speculative thoughts.
+4. For EVERY file touched, you MUST use markdown sections in this exact format:
+
+### \`path/to/file\`
+\`\`\`<language>
+<code snippet or function here>
+\`\`\`
+
+Example:
+### \`src/flask/cli.py\`
+\`\`\`python
+@click.command("config", short_help="Show configuration.")
+@with_appcontext
+def config_command():
+    ...
+\`\`\`
+
+### \`tests/test_cli.py\`
+\`\`\`python
+def test_config_command(runner, app):
+    ...
+\`\`\`
+
+### \`docs/cli.rst\`
+\`\`\`rst
+flask config
+~~~~~~~~~~~~
+Show the application configuration as JSON.
+\`\`\`
+`;
       }
 
       // Ensure session exists
       let sessionId = client.currentSessionId;
-      if (!sessionId) {
+      if (!sessionId || mode === 'agent-mode') {
         sessionId = await client.createSession({ mcpPort });
       }
 
@@ -311,6 +347,10 @@ export async function activate(context: vscode.ExtensionContext) {
       });
     } finally {
       panelProvider.setGenerating(false);
+      panelProvider.postMessage({
+        type: 'stream:event',
+        event: { type: 'turn_complete' },
+      });
     }
   }
 

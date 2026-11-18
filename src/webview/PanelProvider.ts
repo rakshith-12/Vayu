@@ -90,9 +90,9 @@ export class PanelProvider implements vscode.WebviewViewProvider {
 
       case 'user:file_decision':
         if (msg.decision === 'accept_all') {
-          await this.stagingBuffer.acceptAllInActive();
+          await this.stagingBuffer.acceptAllInAllQueued();
         } else {
-          await this.stagingBuffer.rejectAllInActive();
+          this.stagingBuffer.clearAllPendingWithCancelledStatus();
         }
         break;
 
