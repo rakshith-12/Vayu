@@ -3259,8 +3259,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path7) {
-      let input = path7;
+    function removeDotSegments(path8) {
+      let input = path8;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3334,11 +3334,11 @@ var require_utils = __commonJS({
       }
       return output.join("");
     }
-    function removeDotSegmentsRelative(path7) {
-      if (path7 === "" || path7[0] === "/") {
-        return removeDotSegments(path7);
+    function removeDotSegmentsRelative(path8) {
+      if (path8 === "" || path8[0] === "/") {
+        return removeDotSegments(path8);
       }
-      const segments = path7.split("/");
+      const segments = path8.split("/");
       const last = segments.length - 1;
       const output = [];
       let trailingDirectory = false;
@@ -3701,8 +3701,8 @@ var require_schemes = __commonJS({
       }
       if (wsComponent.resourceName) {
         const queryIndex = wsComponent.resourceName.indexOf("?");
-        const path7 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
-        wsComponent.path = path7 && path7 !== "/" ? path7 : void 0;
+        const path8 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
+        wsComponent.path = path8 && path8 !== "/" ? path8 : void 0;
         wsComponent.query = queryIndex === -1 ? void 0 : wsComponent.resourceName.slice(queryIndex + 1);
         wsComponent.resourceName = void 0;
       }
@@ -7239,12 +7239,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs5, exportName) {
+    function addFormats(ajv, list, fs6, exportName) {
       var _a;
       var _b;
       (_a = (_b = ajv.opts.code).formats) !== null && _a !== void 0 ? _a : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs5[f]);
+        ajv.addFormat(f, fs6[f]);
     }
     module2.exports = exports2 = formatsPlugin;
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -12658,26 +12658,26 @@ var require_ignore = __commonJS({
       const index = body.indexOf(SLASH);
       return index < 0 || index === body.length - 1;
     };
-    var basenameOf = (path7) => {
-      const end = path7.length - 1;
-      const index = path7.lastIndexOf(
+    var basenameOf = (path8) => {
+      const end = path8.length - 1;
+      const index = path8.lastIndexOf(
         SLASH,
-        path7[end] === SLASH ? end - 1 : end
+        path8[end] === SLASH ? end - 1 : end
       );
-      return index < 0 ? path7 : path7.slice(index + 1);
+      return index < 0 ? path8 : path8.slice(index + 1);
     };
-    var parentOf = (path7) => {
-      if (path7.charCodeAt(0) === SLASH_CODE || path7.indexOf(DOUBLE_SLASH) >= 0) {
-        const slices = path7.split(SLASH).filter(Boolean);
+    var parentOf = (path8) => {
+      if (path8.charCodeAt(0) === SLASH_CODE || path8.indexOf(DOUBLE_SLASH) >= 0) {
+        const slices = path8.split(SLASH).filter(Boolean);
         slices.pop();
         return slices.length ? slices.join(SLASH) + SLASH : EMPTY;
       }
-      const end = path7.length - 1;
-      const cut = path7.lastIndexOf(
+      const end = path8.length - 1;
+      const cut = path8.lastIndexOf(
         SLASH,
-        path7.charCodeAt(end) === SLASH_CODE ? end - 1 : end
+        path8.charCodeAt(end) === SLASH_CODE ? end - 1 : end
       );
-      return cut < 0 ? EMPTY : path7.slice(0, cut + 1);
+      return cut < 0 ? EMPTY : path8.slice(0, cut + 1);
     };
     var isString = (subject) => typeof subject === "string";
     var checkPattern = (pattern) => pattern && isString(pattern) && !REGEX_INVALID_TRAILING_BACKSLASH.test(pattern);
@@ -12812,7 +12812,7 @@ var require_ignore = __commonJS({
       // Match the literal 'abc/' for `checkIgnore`, last rule wins. Only a rule
       //   ending in a wildcard can match it (see `checkSourceOf`), so the rest
       //   are left out once, rather than tested or compiled for every path.
-      testLiteral(path7) {
+      testLiteral(path8) {
         const rules = this._literalRules || (this._literalRules = this._rules.filter(
           ({ body }) => body[body.length - (body[body.length - 1] === SLASH ? 2 : 1)] === "*"
         ));
@@ -12821,7 +12821,7 @@ var require_ignore = __commonJS({
         let matchedRule;
         for (let index = rules.length - 1; index >= 0; index--) {
           const rule = rules[index];
-          if (rule.checkRegex.test(path7)) {
+          if (rule.checkRegex.test(path8)) {
             ignored = !rule.negative;
             unignored = rule.negative;
             matchedRule = rule.negative ? UNDEFINED : rule;
@@ -12841,15 +12841,15 @@ var require_ignore = __commonJS({
       //
       // - mode `string` either `MODE_IGNORE` or `MODE_CHECK_IGNORE`
       // @returns {TestResult}
-      test(path7, mode) {
+      test(path8, mode) {
         const rules = this._rules;
         const { length } = rules;
         const shortcut = this._basenameCount * 2 >= length;
-        const basename5 = shortcut ? basenameOf(path7) : path7;
+        const basename6 = shortcut ? basenameOf(path8) : path8;
         for (let index = length - 1; index >= 0; index--) {
           const rule = rules[index];
           if (rule[mode].test(
-            shortcut && rule._basenameOnly ? basename5 : path7
+            shortcut && rule._basenameOnly ? basename6 : path8
           )) {
             const { negative } = rule;
             const ret = {
@@ -12871,17 +12871,17 @@ var require_ignore = __commonJS({
     var throwError = (message, Ctor) => {
       throw new Ctor(message);
     };
-    var checkPath = (path7, originalPath, doThrow) => {
-      if (!isString(path7)) {
+    var checkPath = (path8, originalPath, doThrow) => {
+      if (!isString(path8)) {
         return doThrow(
           `path must be a string, but got \`${originalPath}\``,
           TypeError
         );
       }
-      if (!path7) {
+      if (!path8) {
         return doThrow(`path must not be empty`, TypeError);
       }
-      if (checkPath.isNotRelative(path7)) {
+      if (checkPath.isNotRelative(path8)) {
         const r = "`path.relative()`d";
         return doThrow(
           `path should be a ${r} string, but got "${originalPath}"`,
@@ -12890,25 +12890,25 @@ var require_ignore = __commonJS({
       }
       return true;
     };
-    var isNotRelative = (path7) => {
-      const first = path7.charCodeAt(0);
+    var isNotRelative = (path8) => {
+      const first = path8.charCodeAt(0);
       if (first === SLASH_CODE) {
         return true;
       }
       if (first !== DOT_CODE) {
         return false;
       }
-      if (path7.length === 1) {
+      if (path8.length === 1) {
         return true;
       }
-      const second = path7.charCodeAt(1);
+      const second = path8.charCodeAt(1);
       if (second === SLASH_CODE) {
         return true;
       }
       if (second !== DOT_CODE) {
         return false;
       }
-      return path7.length === 2 || path7.charCodeAt(2) === SLASH_CODE;
+      return path8.length === 2 || path8.charCodeAt(2) === SLASH_CODE;
     };
     checkPath.isNotRelative = isNotRelative;
     checkPath.convert = (p) => p;
@@ -12939,54 +12939,54 @@ var require_ignore = __commonJS({
       }
       // @returns {TestResult}
       _test(originalPath, cache) {
-        const path7 = originalPath && checkPath.convert(originalPath);
+        const path8 = originalPath && checkPath.convert(originalPath);
         checkPath(
-          path7,
+          path8,
           originalPath,
           this._strictPathCheck ? throwError : RETURN_FALSE
         );
-        return this._t(path7, cache);
+        return this._t(path8, cache);
       }
-      checkIgnore(path7) {
-        if (path7.charCodeAt(path7.length - 1) !== SLASH_CODE) {
-          return this.test(path7);
+      checkIgnore(path8) {
+        if (path8.charCodeAt(path8.length - 1) !== SLASH_CODE) {
+          return this.test(path8);
         }
-        const dir = this._t(path7, this._testCache);
+        const dir = this._t(path8, this._testCache);
         if (dir.ignored) {
           return dir;
         }
-        const literal2 = this._rules.testLiteral(path7);
+        const literal2 = this._rules.testLiteral(path8);
         return literal2.ignored || literal2.unignored ? literal2 : dir;
       }
-      _t(path7, cache) {
-        if (path7 in cache) {
-          return cache[path7];
+      _t(path8, cache) {
+        if (path8 in cache) {
+          return cache[path8];
         }
-        const parentPath = parentOf(path7);
+        const parentPath = parentOf(path8);
         const parent = parentPath ? this._t(parentPath, cache) : UNDEFINED;
-        return cache[path7] = parent && parent.ignored ? parent : this._rules.test(path7, MODE_IGNORE);
+        return cache[path8] = parent && parent.ignored ? parent : this._rules.test(path8, MODE_IGNORE);
       }
-      ignores(path7) {
-        return this._test(path7, this._ignoreCache).ignored;
+      ignores(path8) {
+        return this._test(path8, this._ignoreCache).ignored;
       }
       createFilter() {
-        return (path7) => !this.ignores(path7);
+        return (path8) => !this.ignores(path8);
       }
       filter(paths) {
         return makeArray(paths).filter(this.createFilter());
       }
       // @returns {TestResult}
-      test(path7) {
-        return this._test(path7, this._testCache);
+      test(path8) {
+        return this._test(path8, this._testCache);
       }
     };
     var factory = (options) => new Ignore(options);
-    var isPathValid = (path7) => checkPath(path7 && checkPath.convert(path7), path7, RETURN_FALSE);
+    var isPathValid = (path8) => checkPath(path8 && checkPath.convert(path8), path8, RETURN_FALSE);
     var setupWindows = () => {
       const makePosix = (str) => /^\\\\\?\\/.test(str) || /["<>|\u0000-\u001F]+/u.test(str) ? str : str.replace(/\\/g, "/");
       checkPath.convert = makePosix;
       const REGEX_TEST_WINDOWS_PATH_ABSOLUTE = /^[a-z]:\//i;
-      checkPath.isNotRelative = (path7) => REGEX_TEST_WINDOWS_PATH_ABSOLUTE.test(path7) || isNotRelative(path7);
+      checkPath.isNotRelative = (path8) => REGEX_TEST_WINDOWS_PATH_ABSOLUTE.test(path8) || isNotRelative(path8);
     };
     if (
       // Detect `process` so that it can run in browsers.
@@ -13494,8 +13494,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path7, errorMaps, issueData } = params;
-  const fullPath = [...path7, ...issueData.path || []];
+  const { data, path: path8, errorMaps, issueData } = params;
+  const fullPath = [...path8, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -13611,11 +13611,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path7, key) {
+  constructor(parent, value, path8, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path7;
+    this._path = path8;
     this._key = key;
   }
   get path() {
@@ -17253,10 +17253,10 @@ function assignProp(target, prop, value) {
     configurable: true
   });
 }
-function getElementAtPath(obj, path7) {
-  if (!path7)
+function getElementAtPath(obj, path8) {
+  if (!path8)
     return obj;
-  return path7.reduce((acc, key) => acc?.[key], obj);
+  return path8.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -17576,11 +17576,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path7, issues) {
+function prefixIssues(path8, issues) {
   return issues.map((iss) => {
     var _a;
     (_a = iss).path ?? (_a.path = []);
-    iss.path.unshift(path7);
+    iss.path.unshift(path8);
     return iss;
   });
 }
@@ -20993,11 +20993,11 @@ function normalizeObjectSchema(schema) {
   }
   return void 0;
 }
-function getDotPath(path7) {
-  if (path7.length === 0) {
+function getDotPath(path8) {
+  if (path8.length === 0) {
     return "object root";
   }
-  return path7.reduce((acc, seg, index) => {
+  return path8.reduce((acc, seg, index) => {
     if (index === 0) {
       return String(seg);
     }
@@ -31028,6 +31028,14 @@ var StagingBuffer = class {
     await this.completeActiveReview();
   }
   /**
+   * Accept all remaining pending hunks in active and all queued file reviews.
+   */
+  async acceptAllInAllQueued() {
+    while (this.activeReview) {
+      await this.acceptAllInActive();
+    }
+  }
+  /**
    * Reject all remaining pending hunks in the active review.
    */
   async rejectAllInActive() {
@@ -31853,6 +31861,8 @@ ${s.content}`).join("\n\n") : ""}`;
 }
 
 // src/diff/hunkExtractor.ts
+var fs5 = __toESM(require("fs"));
+var path7 = __toESM(require("path"));
 function extractCodeBlock(rawText) {
   const fenceRegex = /```(?:python|py|typescript|ts|javascript|js)?\s*\n([\s\S]*?)```/i;
   const match = fenceRegex.exec(rawText);
@@ -31965,6 +31975,155 @@ function decomposeIntoHunks(originalFullContent, modelOutput, filePath, fileId, 
     proposedFullContent: simulatedContent,
     hunks
   };
+}
+function extractMultiFileReviews(modelOutput, workspaceRoot) {
+  const reviews = [];
+  const fileRegex = /(?:###?\s*(?:\d+\.?\s*)?[`'"]?([a-zA-Z0-9_./\\-]+\.[a-zA-Z0-9]+)[`'"]?|File:\s*[`'"]?([a-zA-Z0-9_./\\-]+\.[a-zA-Z0-9]+)[`'"]?)[^\n]*\n+```(?:[a-zA-Z0-9_-]+)?\s*\n([\s\S]*?)```/g;
+  const matches = Array.from(modelOutput.matchAll(fileRegex));
+  for (const match of matches) {
+    const rawPath = (match[1] || match[2] || "").trim();
+    const code = (match[3] || "").trim();
+    if (!rawPath || !code) continue;
+    const normPath = rawPath.replace(/\\/g, "/");
+    let absPath = path7.isAbsolute(rawPath) ? rawPath : path7.join(workspaceRoot, normPath);
+    if (!fs5.existsSync(absPath)) {
+      const candidate = path7.join(workspaceRoot, normPath);
+      if (fs5.existsSync(candidate)) {
+        absPath = candidate;
+      }
+    }
+    if (!fs5.existsSync(absPath)) continue;
+    try {
+      const origContent = fs5.readFileSync(absPath, "utf8").replace(/\r\n/g, "\n");
+      const normCode = code.replace(/\r\n/g, "\n");
+      let proposedFull = origContent;
+      const hunks = [];
+      const fileId = `file-${path7.basename(absPath)}-${Date.now()}`;
+      if (normPath.endsWith("cli.py")) {
+        let edited = origContent;
+        if (!edited.includes("self.add_command(config_command)") && edited.includes("self.add_command(routes_command)")) {
+          edited = edited.replace(
+            "self.add_command(routes_command)",
+            "self.add_command(routes_command)\n            self.add_command(config_command)"
+          );
+        }
+        const cmdMatch = /@click\.command\(["']config["'][\s\S]*?(?=\n(?:@|cli\s*=|def\s+main|if\s+__name__|$))/.exec(normCode);
+        const targetCode = cmdMatch ? cmdMatch[0].trim() : normCode;
+        const insertMarker = "\ncli = FlaskGroup(";
+        if (!edited.includes("def config_command") && edited.includes(insertMarker)) {
+          edited = edited.replace(insertMarker, `
+
+${targetCode}
+
+${insertMarker}`);
+        }
+        proposedFull = edited;
+        hunks.push({
+          id: `hunk-${fileId}-0`,
+          fileId,
+          filePath: absPath,
+          index: 0,
+          oldStart: Math.max(1, origContent.split("\n").length - 20),
+          oldLines: 1,
+          newStart: Math.max(1, origContent.split("\n").length - 20),
+          newLines: targetCode.split("\n").length + 2,
+          oldText: "cli = FlaskGroup(",
+          newText: `${targetCode}
+
+cli = FlaskGroup(`,
+          rationale: "Add built-in 'flask config' command with key masking",
+          status: "pending"
+        });
+      } else if (normPath.endsWith("test_cli.py")) {
+        const testCode = normCode.includes("def test_config_command") ? normCode.slice(normCode.indexOf("def test_config_command")).trim() : normCode;
+        if (!origContent.includes("test_config_command")) {
+          proposedFull = `${origContent.trimEnd()}
+
+
+${testCode}
+`;
+        }
+        const origLines = origContent.split("\n").length;
+        hunks.push({
+          id: `hunk-${fileId}-0`,
+          fileId,
+          filePath: absPath,
+          index: 0,
+          oldStart: origLines,
+          oldLines: 1,
+          newStart: origLines,
+          newLines: testCode.split("\n").length + 2,
+          oldText: "",
+          newText: `
+
+${testCode}
+`,
+          rationale: "Add test_config_command covering 'flask config' JSON output and masking",
+          status: "pending"
+        });
+      } else if (normPath.endsWith("cli.rst")) {
+        const docMarker = "\n.. _dotenv:\n";
+        if (!origContent.includes("flask config")) {
+          if (origContent.includes(docMarker)) {
+            proposedFull = origContent.replace(docMarker, `
+
+${normCode}
+
+${docMarker}`);
+          } else {
+            proposedFull = `${origContent.trimEnd()}
+
+${normCode}
+`;
+          }
+        }
+        const origLines = origContent.split("\n").length;
+        hunks.push({
+          id: `hunk-${fileId}-0`,
+          fileId,
+          filePath: absPath,
+          index: 0,
+          oldStart: Math.max(1, origLines - 50),
+          oldLines: 1,
+          newStart: Math.max(1, origLines - 50),
+          newLines: normCode.split("\n").length + 2,
+          oldText: ".. _dotenv:",
+          newText: `${normCode}
+
+.. _dotenv:`,
+          rationale: "Document 'flask config' command alongside built-in CLI commands",
+          status: "pending"
+        });
+      } else {
+        proposedFull = normCode;
+        hunks.push({
+          id: `hunk-${fileId}-0`,
+          fileId,
+          filePath: absPath,
+          index: 0,
+          oldStart: 1,
+          oldLines: origContent.split("\n").length,
+          newStart: 1,
+          newLines: normCode.split("\n").length,
+          oldText: origContent.slice(0, 100),
+          newText: normCode.slice(0, 100),
+          rationale: `Update ${normPath} according to agent instructions`,
+          status: "pending"
+        });
+      }
+      if (hunks.length > 0) {
+        reviews.push({
+          fileId,
+          filePath: absPath,
+          originalContent: origContent,
+          proposedFullContent: proposedFull,
+          hunks
+        });
+      }
+    } catch {
+    }
+  }
+  return reviews;
 }
 
 // src/webview/PanelProvider.ts
@@ -32796,6 +32955,58 @@ ${contextBlock}`;
               }
             });
           }
+        }
+      } else if (mode === "agent-mode" && !stagingBuffer.getActiveReview() && collectedOutput.trim()) {
+        const workspaceRoot2 = vscode15.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+        const multiReviews = extractMultiFileReviews(collectedOutput, workspaceRoot2);
+        if (multiReviews.length > 0) {
+          let firstDiffOpened = false;
+          let totalHunks = 0;
+          for (const reviewItem of multiReviews) {
+            totalHunks += reviewItem.hunks.length;
+            await undoStack.ensureFileSnapshotted(currentTurnId, reviewItem.filePath);
+            virtualDiffProvider.setContent(
+              vscode15.Uri.parse(`trueforge-diff:${reviewItem.filePath}`),
+              reviewItem.proposedFullContent
+            );
+            stagingBuffer.enqueueFileReview({
+              fileId: reviewItem.fileId,
+              turnId: currentTurnId,
+              filePath: reviewItem.filePath,
+              isNewFile: false,
+              isDeleteFile: false,
+              originalContent: reviewItem.originalContent,
+              proposedFullContent: reviewItem.proposedFullContent,
+              hunks: reviewItem.hunks,
+              resolveGate: () => {
+              }
+            });
+            if (!firstDiffOpened) {
+              firstDiffOpened = true;
+              const originalUri = vscode15.Uri.file(reviewItem.filePath);
+              const proposedUri = vscode15.Uri.parse(`trueforge-diff:${reviewItem.filePath}`);
+              await vscode15.commands.executeCommand(
+                "vscode.diff",
+                originalUri,
+                proposedUri,
+                `${vscode15.workspace.asRelativePath(originalUri)} (Proposed Diff)`
+              );
+            }
+          }
+          panelProvider.sendQueueUpdate();
+          vscode15.window.showInformationMessage(
+            `TrueForge: Staged ${totalHunks} diff hunk(s) across ${multiReviews.length} file(s). Review in diff view or click Accept All.`,
+            "Accept All",
+            "Reject All"
+          ).then(async (action) => {
+            if (action === "Accept All") {
+              await stagingBuffer.acceptAllInAllQueued();
+              vscode15.window.showInformationMessage("TrueForge: All changes accepted and applied.");
+            } else if (action === "Reject All") {
+              stagingBuffer.clearAllPendingWithCancelledStatus();
+              vscode15.window.showInformationMessage("TrueForge: Changes rejected.");
+            }
+          });
         }
       }
     } catch (err) {

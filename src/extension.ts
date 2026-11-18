@@ -16,7 +16,7 @@ import { UndoCheckpointStack } from './diff/undoStack';
 import { ContextLedgerTracker } from './context/ledgerTracker';
 import { ContextRetriever } from './context/retriever';
 import { buildInlineEditContext } from './context/budgetAssembler';
-import { decomposeIntoHunks } from './diff/hunkExtractor';
+import { decomposeIntoHunks, extractMultiFileReviews } from './diff/hunkExtractor';
 import { PanelProvider } from './webview/PanelProvider';
 import type { ExecutionMode, TextDeltaEvent } from './types/contracts';
 
@@ -240,6 +240,66 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
               });
           }
+        }
+      } else if (mode === 'agent-mode' && !stagingBuffer.getActiveReview() && collectedOutput.trim()) {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+        const multiReviews = extractMultiFileReviews(collectedOutput, workspaceRoot);
+
+        if (multiReviews.length > 0) {
+          let firstDiffOpened = false;
+          let totalHunks = 0;
+
+          for (const reviewItem of multiReviews) {
+            totalHunks += reviewItem.hunks.length;
+            await undoStack.ensureFileSnapshotted(currentTurnId, reviewItem.filePath);
+
+            virtualDiffProvider.setContent(
+              vscode.Uri.parse(`trueforge-diff:${reviewItem.filePath}`),
+              reviewItem.proposedFullContent,
+            );
+
+            stagingBuffer.enqueueFileReview({
+              fileId: reviewItem.fileId,
+              turnId: currentTurnId,
+              filePath: reviewItem.filePath,
+              isNewFile: false,
+              isDeleteFile: false,
+              originalContent: reviewItem.originalContent,
+              proposedFullContent: reviewItem.proposedFullContent,
+              hunks: reviewItem.hunks,
+              resolveGate: () => {},
+            });
+
+            if (!firstDiffOpened) {
+              firstDiffOpened = true;
+              const originalUri = vscode.Uri.file(reviewItem.filePath);
+              const proposedUri = vscode.Uri.parse(`trueforge-diff:${reviewItem.filePath}`);
+              await vscode.commands.executeCommand(
+                'vscode.diff',
+                originalUri,
+                proposedUri,
+                `${vscode.workspace.asRelativePath(originalUri)} (Proposed Diff)`,
+              );
+            }
+          }
+
+          panelProvider.sendQueueUpdate();
+
+          vscode.window
+            .showInformationMessage(
+              `TrueForge: Staged ${totalHunks} diff hunk(s) across ${multiReviews.length} file(s). Review in diff view or click Accept All.`,
+              'Accept All',
+              'Reject All',
+            )
+            .then(async (action) => {
+              if (action === 'Accept All') {
+                await stagingBuffer.acceptAllInAllQueued();
+                vscode.window.showInformationMessage('TrueForge: All changes accepted and applied.');
+              } else if (action === 'Reject All') {
+                stagingBuffer.clearAllPendingWithCancelledStatus();
+                vscode.window.showInformationMessage('TrueForge: Changes rejected.');
+              }
+            });
         }
       }
     } catch (err: unknown) {

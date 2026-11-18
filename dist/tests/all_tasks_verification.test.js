@@ -357,6 +357,14 @@ var StagingBuffer = class {
     await this.completeActiveReview();
   }
   /**
+   * Accept all remaining pending hunks in active and all queued file reviews.
+   */
+  async acceptAllInAllQueued() {
+    while (this.activeReview) {
+      await this.acceptAllInActive();
+    }
+  }
+  /**
    * Reject all remaining pending hunks in the active review.
    */
   async rejectAllInActive() {
