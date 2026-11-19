@@ -16,11 +16,13 @@ import type { TrueForgeClient } from '../trueforge/client';
 import type { StagingBuffer } from '../diff/stagingBuffer';
 import type { UndoCheckpointStack } from '../diff/undoStack';
 import type { ContextLedgerTracker } from '../context/ledgerTracker';
+import type { ModelSwitcher } from '../trueforge/modelSwitcher';
 import { buildInlineEditContext } from '../context/budgetAssembler';
 
 export class PanelProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private isGenerating = false;
+  private healthCheckTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -29,6 +31,7 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     private readonly undoStack: UndoCheckpointStack,
     private readonly ledgerTracker: ContextLedgerTracker,
     private readonly onStartTurn: (prompt: string, mode: ExecutionMode) => Promise<void>,
+    private readonly modelSwitcher?: ModelSwitcher,
   ) {
     // Forward staging buffer queue updates to webview
     this.stagingBuffer.onDidChangeQueue(() => {
@@ -41,6 +44,11 @@ export class PanelProvider implements vscode.WebviewViewProvider {
         type: 'ledger:updated',
         ledger: snapshot,
       });
+    });
+
+    // Listen to model switches
+    this.modelSwitcher?.onDidChangeModel(() => {
+      this.broadcastStatus().catch(() => {});
     });
   }
 
@@ -62,12 +70,29 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       await this.handleWebviewMessage(msg);
     });
 
+    webviewView.onDidDispose(() => {
+      if (this.healthCheckTimer) {
+        clearInterval(this.healthCheckTimer);
+        this.healthCheckTimer = undefined;
+      }
+    });
+
     // Send initial states
     this.sendQueueUpdate();
     this.postMessage({
       type: 'ledger:updated',
       ledger: this.ledgerTracker.getSnapshot(),
     });
+
+    // Broadcast initial server and model health
+    this.broadcastStatus().catch(() => {});
+
+    // Polling server & model health check every 8 seconds
+    if (!this.healthCheckTimer) {
+      this.healthCheckTimer = setInterval(() => {
+        this.broadcastStatus().catch(() => {});
+      }, 8000);
+    }
   }
 
   private async handleWebviewMessage(msg: WebviewToHostMessage): Promise<void> {
@@ -138,7 +163,6 @@ export class PanelProvider implements vscode.WebviewViewProvider {
         break;
 
       case 'user:query_mentions':
-        // Return files and symbols matching prefix
         try {
           const files = await vscode.workspace.findFiles(`**/*${msg.prefix}*`, '**/node_modules/**', 10);
           const results = files.map((f) => ({
@@ -153,6 +177,22 @@ export class PanelProvider implements vscode.WebviewViewProvider {
         } catch {
           // ignore
         }
+        break;
+
+      case 'user:switch_model':
+        if (msg.modelId && this.modelSwitcher) {
+          this.modelSwitcher.setActiveModel(msg.modelId);
+          await this.broadcastStatus();
+        } else if (this.modelSwitcher) {
+          const chosen = await this.modelSwitcher.promptModelQuickPick();
+          if (chosen) {
+            await this.broadcastStatus();
+          }
+        }
+        break;
+
+      case 'user:refresh_status':
+        await this.broadcastStatus();
         break;
     }
   }
@@ -173,6 +213,62 @@ export class PanelProvider implements vscode.WebviewViewProvider {
   setGenerating(isGenerating: boolean): void {
     this.isGenerating = isGenerating;
     vscode.commands.executeCommand('setContext', 'trueforge.isGenerating', isGenerating);
+  }
+
+  /**
+   * Broadcast live Server and Model health status to the webview UI.
+   */
+  async broadcastStatus(): Promise<void> {
+    const config = vscode.workspace.getConfiguration('trueforge');
+    const serverUrl = config.get<string>('serverUrl') || 'http://localhost:3000';
+    let serverOnline = false;
+    let modelOnline = false;
+    let availableModels: Array<{ id: string; name: string }> = [
+      { id: 'google-gemini/gemini-3-5-flash-lite', name: 'Gemini 3.5 Flash-Lite' },
+      { id: 'google-gemini/gemini-3-1-flash-lite', name: 'Gemini 3.1 Flash-Lite' },
+    ];
+
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 1800);
+      const res = await fetch(`${serverUrl}/api/v1/sessions`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok || res.status === 401 || res.status === 403) {
+        serverOnline = true;
+      }
+    } catch {
+      serverOnline = false;
+    }
+
+    try {
+      if (serverOnline) {
+        const models = await this.client.listModels();
+        if (models && models.length > 0) {
+          availableModels = models;
+          modelOnline = true;
+        } else {
+          modelOnline = true;
+        }
+      }
+    } catch {
+      modelOnline = serverOnline;
+    }
+
+    const rawModel = this.modelSwitcher?.getActiveModel() || 'gemini-3.5-flash-lite';
+    const activeModel = rawModel.includes('/') ? rawModel.split('/').pop()! : rawModel;
+
+    this.postMessage({
+      type: 'status:updated',
+      serverOnline,
+      serverUrl,
+      modelOnline: serverOnline && modelOnline,
+      activeModel,
+      availableModels,
+    });
   }
 
   private getHtmlContent(webview: vscode.Webview): string {
