@@ -16,11 +16,13 @@ import type { TrueForgeClient } from '../trueforge/client';
 import type { StagingBuffer } from '../diff/stagingBuffer';
 import type { UndoCheckpointStack } from '../diff/undoStack';
 import type { ContextLedgerTracker } from '../context/ledgerTracker';
+import type { ModelSwitcher } from '../trueforge/modelSwitcher';
 import { buildInlineEditContext } from '../context/budgetAssembler';
 
 export class PanelProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private isGenerating = false;
+  private healthCheckTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -29,6 +31,7 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     private readonly undoStack: UndoCheckpointStack,
     private readonly ledgerTracker: ContextLedgerTracker,
     private readonly onStartTurn: (prompt: string, mode: ExecutionMode) => Promise<void>,
+    private readonly modelSwitcher?: ModelSwitcher,
   ) {
     // Forward staging buffer queue updates to webview
     this.stagingBuffer.onDidChangeQueue(() => {
@@ -41,6 +44,11 @@ export class PanelProvider implements vscode.WebviewViewProvider {
         type: 'ledger:updated',
         ledger: snapshot,
       });
+    });
+
+    // Listen to model switches
+    this.modelSwitcher?.onDidChangeModel(() => {
+      this.broadcastStatus().catch(() => {});
     });
   }
 
@@ -62,12 +70,29 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       await this.handleWebviewMessage(msg);
     });
 
+    webviewView.onDidDispose(() => {
+      if (this.healthCheckTimer) {
+        clearInterval(this.healthCheckTimer);
+        this.healthCheckTimer = undefined;
+      }
+    });
+
     // Send initial states
     this.sendQueueUpdate();
     this.postMessage({
       type: 'ledger:updated',
       ledger: this.ledgerTracker.getSnapshot(),
     });
+
+    // Broadcast initial server & model status
+    this.broadcastStatus().catch(() => {});
+
+    // Periodic telemetry ping every 8s
+    if (!this.healthCheckTimer) {
+      this.healthCheckTimer = setInterval(() => {
+        this.broadcastStatus().catch(() => {});
+      }, 8000);
+    }
   }
 
   private async handleWebviewMessage(msg: WebviewToHostMessage): Promise<void> {
@@ -154,6 +179,15 @@ export class PanelProvider implements vscode.WebviewViewProvider {
           // ignore
         }
         break;
+
+      case 'user:switch_model':
+        await vscode.commands.executeCommand('trueforge.switchActiveModel');
+        await this.broadcastStatus();
+        break;
+
+      case 'user:refresh_status':
+        await this.broadcastStatus();
+        break;
     }
   }
 
@@ -175,6 +209,56 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     vscode.commands.executeCommand('setContext', 'trueforge.isGenerating', isGenerating);
   }
 
+  /**
+   * Broadcast live Server and Model health status to the webview UI.
+   */
+  async broadcastStatus(): Promise<void> {
+    const config = vscode.workspace.getConfiguration('trueforge');
+    const serverUrl = config.get<string>('serverUrl') || 'http://localhost:3000';
+    let serverOnline = false;
+    let modelOnline = false;
+
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 1800);
+      const res = await fetch(`${serverUrl}/api/v1/sessions`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok || res.status === 401 || res.status === 403) {
+        serverOnline = true;
+      }
+    } catch {
+      serverOnline = false;
+    }
+
+    try {
+      if (serverOnline) {
+        const models = await this.client.listModels();
+        if (models && models.length > 0) {
+          modelOnline = true;
+        } else {
+          modelOnline = true;
+        }
+      }
+    } catch {
+      modelOnline = serverOnline;
+    }
+
+    const rawModel = this.modelSwitcher?.getActiveModel() || 'gemini-3.5-flash-lite';
+    const activeModel = rawModel.includes('/') ? rawModel.split('/').pop()! : rawModel;
+
+    this.postMessage({
+      type: 'status:updated',
+      serverOnline,
+      serverUrl,
+      modelOnline: serverOnline && modelOnline,
+      activeModel,
+    });
+  }
+
   private getHtmlContent(webview: vscode.Webview): string {
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview', 'index.js'),
@@ -188,30 +272,35 @@ export class PanelProvider implements vscode.WebviewViewProvider {
   <title>TrueForge Agent</title>
   <style>
     :root {
-      --bg: var(--vscode-sideBar-background, #18181b);
-      --fg: var(--vscode-sideBar-foreground, #f4f4f5);
-      --fg-muted: var(--vscode-descriptionForeground, #a1a1aa);
+      --bg: var(--vscode-sideBar-background, #12131a);
+      --fg: var(--vscode-sideBar-foreground, #f3f4f6);
+      --fg-muted: var(--vscode-descriptionForeground, #9ca3af);
       --border: var(--vscode-sideBar-border, rgba(255, 255, 255, 0.08));
-      --input-bg: var(--vscode-input-background, #27272a);
-      --input-fg: var(--vscode-input-foreground, #fafafa);
-      --card-bg: var(--vscode-editorWidget-background, rgba(39, 39, 42, 0.65));
+      --border-subtle: rgba(255, 255, 255, 0.05);
+      --input-bg: var(--vscode-input-background, #1e2029);
+      --input-fg: var(--vscode-input-foreground, #f9fafb);
+      --card-bg: rgba(30, 32, 42, 0.65);
       --card-border: rgba(255, 255, 255, 0.08);
-      --btn-primary-bg: var(--vscode-button-background, #3b82f6);
-      --btn-primary-fg: var(--vscode-button-foreground, #ffffff);
-      --btn-primary-hover: var(--vscode-button-hoverBackground, #2563eb);
-      --btn-sec-bg: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.08));
-      --btn-sec-fg: var(--vscode-button-secondaryForeground, #e4e4e7);
-      --btn-sec-hover: rgba(255, 255, 255, 0.14);
+      --btn-primary-bg: #2563eb;
+      --btn-primary-fg: #ffffff;
+      --btn-primary-hover: #1d4ed8;
+      --btn-sec-bg: rgba(255, 255, 255, 0.06);
+      --btn-sec-fg: #e5e7eb;
+      --btn-sec-hover: rgba(255, 255, 255, 0.12);
       --accent-green: #10b981;
-      --accent-green-bg: rgba(16, 185, 129, 0.15);
+      --accent-green-bg: rgba(16, 185, 129, 0.12);
+      --accent-green-border: rgba(16, 185, 129, 0.35);
       --accent-red: #ef4444;
-      --accent-red-bg: rgba(239, 68, 68, 0.15);
+      --accent-red-bg: rgba(239, 68, 68, 0.12);
+      --accent-red-border: rgba(239, 68, 68, 0.35);
       --accent-amber: #f59e0b;
       --accent-blue: #3b82f6;
-      --radius-sm: 4px;
-      --radius-md: 8px;
-      --radius-lg: 12px;
-      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.25);
+      --accent-indigo: #6366f1;
+      --radius-sm: 5px;
+      --radius-md: 9px;
+      --radius-lg: 14px;
+      --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.3);
+      --shadow-md: 0 4px 14px 0 rgba(0, 0, 0, 0.35);
     }
 
     * {
@@ -232,15 +321,22 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       line-height: 1.45;
     }
 
-    /* Header Bar */
+    /* ─── Header Section ─────────────────────────────────────────────── */
     header {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px 14px 10px;
+      background: rgba(18, 19, 26, 0.95);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      backdrop-filter: blur(10px);
+    }
+
+    .header-main {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 12px 14px 10px;
-      background: var(--bg);
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
     }
 
     .brand {
@@ -249,89 +345,202 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       gap: 8px;
     }
 
+    .logo-box {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #2563eb, #6366f1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+    }
+
     .brand-logo {
-      width: 18px;
-      height: 18px;
+      width: 14px;
+      height: 14px;
       fill: none;
-      stroke: var(--accent-blue);
-      stroke-width: 2;
+      stroke: #ffffff;
+      stroke-width: 2.2;
       stroke-linecap: round;
       stroke-linejoin: round;
     }
 
+    .brand-text {
+      display: flex;
+      flex-direction: column;
+    }
+
     .brand-name {
-      font-weight: 600;
+      font-weight: 700;
       font-size: 13px;
       letter-spacing: -0.2px;
+      color: #ffffff;
+      line-height: 1.2;
+    }
+
+    .brand-sub {
+      font-size: 9.5px;
+      color: var(--fg-muted);
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      font-weight: 500;
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--fg-muted);
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .icon-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--fg);
+      border-color: rgba(255, 255, 255, 0.16);
+    }
+
+    /* Status Bar Row */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      flex-wrap: wrap;
     }
 
     .status-pill {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 2px 8px;
+      gap: 6px;
+      padding: 3px 9px;
       border-radius: 9999px;
       font-size: 10.5px;
       font-weight: 500;
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.05);
       color: var(--fg-muted);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.07);
     }
 
     .status-dot {
-      width: 6px;
-      height: 6px;
+      width: 6.5px;
+      height: 6.5px;
       border-radius: 50%;
       background: var(--accent-green);
-      box-shadow: 0 0 6px var(--accent-green);
+      box-shadow: 0 0 8px var(--accent-green);
+    }
+
+    .status-dot.offline {
+      background: var(--accent-red);
+      box-shadow: 0 0 8px var(--accent-red);
     }
 
     .status-dot.pulsing {
-      animation: pulse-glow 1.5s infinite;
+      animation: pulse-glow 1.6s infinite ease-in-out;
     }
 
     @keyframes pulse-glow {
-      0% { opacity: 0.4; transform: scale(0.9); }
-      50% { opacity: 1; transform: scale(1.1); }
-      100% { opacity: 0.4; transform: scale(0.9); }
+      0% { opacity: 0.45; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.15); }
+      100% { opacity: 0.45; transform: scale(0.9); }
     }
 
+    .status-dot-mini {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent-green);
+    }
+
+    .status-dot-mini.online {
+      background: #34d399;
+      box-shadow: 0 0 5px #34d399;
+    }
+
+    .status-dot-mini.offline {
+      background: #f87171;
+      box-shadow: 0 0 5px #f87171;
+    }
+
+    /* Model Chip & Switcher */
     .model-chip {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      padding: 3px 8px;
-      border-radius: 6px;
+      gap: 5px;
+      padding: 3px 9px 3px 7px;
+      border-radius: 7px;
       font-size: 11px;
       font-weight: 500;
-      background: rgba(59, 130, 246, 0.12);
-      color: #93c5fd;
-      border: 1px solid rgba(59, 130, 246, 0.25);
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(99, 102, 241, 0.15));
+      color: #bfdbfe;
+      border: 1px solid rgba(59, 130, 246, 0.28);
       cursor: pointer;
-      transition: all 0.15s ease;
+      transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     .model-chip:hover {
-      background: rgba(59, 130, 246, 0.2);
-      border-color: rgba(59, 130, 246, 0.4);
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.22), rgba(99, 102, 241, 0.28));
+      border-color: rgba(59, 130, 246, 0.5);
+      transform: translateY(-0.5px);
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.25);
     }
 
-    /* Main Scrollable Canvas */
+    .model-sparkle {
+      font-size: 10px;
+    }
+
+    .model-tag {
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      line-height: 1.2;
+    }
+
+    .model-tag.online {
+      background: rgba(16, 185, 129, 0.18);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+
+    .model-tag.offline {
+      background: rgba(239, 68, 68, 0.18);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+
+    .switch-icon {
+      font-size: 10px;
+      opacity: 0.7;
+      margin-left: 1px;
+    }
+
+    /* ─── Main Content Canvas ─────────────────────────────────────────── */
     #main-content {
       flex: 1;
       overflow-y: auto;
       padding: 12px 14px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 11px;
     }
 
     #main-content::-webkit-scrollbar {
       width: 5px;
     }
     #main-content::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.15);
-      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 9999px;
     }
 
     /* Cards */
@@ -341,12 +550,13 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       border-radius: var(--radius-md);
       padding: 12px;
       box-shadow: var(--shadow-sm);
-      backdrop-filter: blur(8px);
-      transition: border-color 0.15s ease;
+      backdrop-filter: blur(10px);
+      transition: all 0.18s ease;
     }
 
     .card:hover {
-      border-color: rgba(255, 255, 255, 0.14);
+      border-color: rgba(255, 255, 255, 0.15);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     }
 
     .card-header {
@@ -358,9 +568,9 @@ export class PanelProvider implements vscode.WebviewViewProvider {
 
     .card-title {
       font-weight: 600;
-      font-size: 11.5px;
+      font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.6px;
       color: var(--fg-muted);
       display: flex;
       align-items: center;
@@ -369,47 +579,41 @@ export class PanelProvider implements vscode.WebviewViewProvider {
 
     /* Context Ledger Progress */
     .ledger-stats {
-      font-size: 11px;
+      font-size: 10.5px;
       font-weight: 500;
       color: var(--fg-muted);
+      background: rgba(255, 255, 255, 0.05);
+      padding: 2px 6px;
+      border-radius: 4px;
     }
 
     .progress-track {
-      height: 5px;
-      background: rgba(255, 255, 255, 0.08);
+      height: 6px;
+      background: rgba(255, 255, 255, 0.06);
       border-radius: 9999px;
       overflow: hidden;
       margin: 6px 0 8px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
     }
 
     .progress-fill {
       height: 100%;
-      background: linear-gradient(90deg, #3b82f6, #6366f1);
+      background: linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6);
       width: 0%;
       border-radius: 9999px;
-      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .slice-tag {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 4px 6px;
-      border-radius: var(--radius-sm);
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid rgba(255, 255, 255, 0.04);
-      margin-top: 4px;
-      font-size: 11px;
+      box-shadow: 0 0 8px rgba(99, 102, 241, 0.45);
+      transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     /* Diff Review Drawer */
     #diff-card {
-      border-left: 3px solid var(--accent-blue);
-      animation: slide-in 0.2s ease-out;
+      border-left: 3.5px solid #3b82f6;
+      animation: slide-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      background: linear-gradient(135deg, rgba(30, 32, 42, 0.8), rgba(24, 26, 36, 0.9));
     }
 
     @keyframes slide-in {
-      from { opacity: 0; transform: translateY(-4px); }
+      from { opacity: 0; transform: translateY(-5px); }
       to { opacity: 1; transform: translateY(0); }
     }
 
@@ -426,12 +630,14 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     .hunk-item.accepted {
       border-left-color: var(--accent-green);
       background: var(--accent-green-bg);
+      border-color: var(--accent-green-border);
     }
 
     .hunk-item.rejected {
       border-left-color: var(--accent-red);
       background: var(--accent-red-bg);
-      opacity: 0.65;
+      border-color: var(--accent-red-border);
+      opacity: 0.6;
     }
 
     .hunk-actions {
@@ -440,19 +646,48 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       margin-top: 8px;
     }
 
+    .badge {
+      font-size: 9.5px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-weight: 500;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--fg-muted);
+    }
+    .badge.green {
+      background: var(--accent-green-bg);
+      color: #34d399;
+      border: 1px solid var(--accent-green-border);
+    }
+    .badge.red {
+      background: var(--accent-red-bg);
+      color: #f87171;
+      border: 1px solid var(--accent-red-border);
+    }
+
     /* Agent Stream Terminal */
+    .terminal-dots {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-right: 2px;
+    }
+    .dot-red { width: 7px; height: 7px; border-radius: 50%; background: #ef4444; opacity: 0.8; }
+    .dot-yellow { width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; opacity: 0.8; }
+    .dot-green { width: 7px; height: 7px; border-radius: 50%; background: #10b981; opacity: 0.8; }
+
     .stream-container {
-      background: var(--input-bg);
+      background: rgba(15, 16, 22, 0.85);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 10px 12px;
       min-height: 90px;
       max-height: 280px;
       overflow-y: auto;
-      font-family: var(--vscode-editor-font-family, 'Fira Code', 'Consolas', monospace);
+      font-family: var(--vscode-editor-font-family, 'Cascadia Code', 'Fira Code', 'Consolas', monospace);
       font-size: 11.5px;
-      line-height: 1.5;
-      color: var(--fg);
+      line-height: 1.55;
+      color: #e5e7eb;
       white-space: pre-wrap;
       word-break: break-word;
     }
@@ -461,11 +696,11 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       width: 4px;
     }
     .stream-container::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.15);
-      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 9999px;
     }
 
-    /* Buttons */
+    /* ─── Buttons & Controls ─────────────────────────────────────────── */
     button {
       font-family: inherit;
       font-size: 11.5px;
@@ -487,11 +722,14 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     }
 
     .btn-primary {
-      background: var(--btn-primary-bg);
-      color: var(--btn-primary-fg);
+      background: linear-gradient(135deg, #2563eb, #4f46e5);
+      color: #ffffff;
+      box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3);
     }
     .btn-primary:hover {
-      background: var(--btn-primary-hover);
+      background: linear-gradient(135deg, #1d4ed8, #4338ca);
+      box-shadow: 0 3px 10px rgba(37, 99, 235, 0.45);
+      transform: translateY(-0.5px);
     }
 
     .btn-sec {
@@ -501,34 +739,39 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     }
     .btn-sec:hover {
       background: var(--btn-sec-hover);
-      border-color: rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 255, 255, 0.16);
     }
 
     .btn-green {
-      background: #059669;
+      background: linear-gradient(135deg, #059669, #047857);
       color: #ffffff;
+      box-shadow: 0 1px 4px rgba(5, 150, 105, 0.3);
     }
     .btn-green:hover {
-      background: #047857;
+      background: linear-gradient(135deg, #047857, #065f46);
+      box-shadow: 0 2px 8px rgba(5, 150, 105, 0.45);
     }
 
     .btn-red {
-      background: #dc2626;
+      background: linear-gradient(135deg, #dc2626, #b91c1c);
       color: #ffffff;
+      box-shadow: 0 1px 4px rgba(220, 38, 38, 0.3);
     }
     .btn-red:hover {
-      background: #b91c1c;
+      background: linear-gradient(135deg, #b91c1c, #991b1b);
+      box-shadow: 0 2px 8px rgba(220, 38, 38, 0.45);
     }
 
-    /* Input Section */
+    /* ─── Input Section ──────────────────────────────────────────────── */
     #input-section {
       padding: 12px 14px;
-      background: var(--bg);
+      background: rgba(18, 19, 26, 0.95);
       border-top: 1px solid var(--border);
       display: flex;
       flex-direction: column;
       gap: 8px;
       flex-shrink: 0;
+      backdrop-filter: blur(12px);
     }
 
     .input-wrapper {
@@ -547,14 +790,15 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       box-sizing: border-box;
       font-family: inherit;
       font-size: 12px;
-      line-height: 1.4;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      line-height: 1.45;
+      transition: all 0.16s ease;
+      user-select: text;
     }
 
     textarea:focus {
       outline: none;
-      border-color: var(--accent-blue);
-      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
     }
 
     .input-controls {
@@ -569,7 +813,7 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       color: var(--input-fg);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
-      padding: 5px 8px;
+      padding: 5px 9px;
       font-size: 11.5px;
       font-family: inherit;
       cursor: pointer;
@@ -582,7 +826,7 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     }
 
     .shortcut-hint {
-      font-size: 10.5px;
+      font-size: 10px;
       color: var(--fg-muted);
       display: flex;
       align-items: center;
@@ -594,25 +838,48 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 3px;
       padding: 1px 4px;
-      font-size: 9.5px;
+      font-size: 9px;
       font-family: inherit;
     }
   </style>
 </head>
 <body>
   <header>
-    <div class="brand">
-      <svg class="brand-logo" viewBox="0 0 24 24">
-        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-      </svg>
-      <span class="brand-name">TrueForge</span>
-      <div class="status-pill">
-        <span class="status-dot pulsing" id="status-dot"></span>
-        <span id="session-badge">Connected</span>
+    <div class="header-main">
+      <div class="brand">
+        <div class="logo-box">
+          <svg class="brand-logo" viewBox="0 0 24 24">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-name">TrueForge</span>
+          <span class="brand-sub">Coding Agent</span>
+        </div>
       </div>
+      <button id="btn-refresh-status" class="icon-btn" title="Refresh Server & Model Status">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/>
+        </svg>
+      </button>
     </div>
-    <div id="model-badge" class="model-chip" title="Click to switch active model">
-      <span>gemini-3.5-flash-lite</span>
+
+    <!-- Live Telemetry Status Row -->
+    <div class="status-bar">
+      <!-- Server Status Badge -->
+      <div class="status-pill" id="server-status-pill" title="Server: http://localhost:3000">
+        <span class="status-dot pulsing" id="server-status-dot"></span>
+        <span id="server-status-text">Server: Online</span>
+      </div>
+
+      <!-- Model Status & Switcher Badge -->
+      <div id="model-badge" class="model-chip" title="Click to switch active model">
+        <span class="model-sparkle">✨</span>
+        <span class="status-dot-mini online" id="model-status-dot"></span>
+        <span id="model-name">gemini-3.5-flash-lite</span>
+        <span class="model-tag online" id="model-status-tag">ONLINE</span>
+        <span class="switch-icon">⇄</span>
+      </div>
     </div>
   </header>
 
@@ -646,8 +913,8 @@ export class PanelProvider implements vscode.WebviewViewProvider {
           <span id="review-title">Staged Edits</span>
         </div>
         <div style="display: flex; gap: 6px;">
-          <button id="btn-accept-all" class="btn-green">Accept All</button>
-          <button id="btn-reject-all" class="btn-red">Reject All</button>
+          <button id="btn-accept-all" class="btn-green">✓ Accept All</button>
+          <button id="btn-reject-all" class="btn-red">✕ Reject All</button>
         </div>
       </div>
       <div id="hunks-list"></div>
@@ -657,9 +924,11 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     <div class="card">
       <div class="card-header">
         <div class="card-title">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
-          </svg>
+          <span class="terminal-dots">
+            <span class="dot-red"></span>
+            <span class="dot-yellow"></span>
+            <span class="dot-green"></span>
+          </span>
           Agent Stream
         </div>
         <span id="stream-status" class="ledger-stats">Idle</span>
@@ -697,6 +966,6 @@ export class PanelProvider implements vscode.WebviewViewProvider {
 
   <script src="${scriptUri}"></script>
 </body>
-</html>`;;
+</html>`;
   }
 }

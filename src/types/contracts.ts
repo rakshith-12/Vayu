@@ -341,21 +341,30 @@ export type WebviewToHostMessage =
   | { type: 'user:pin_slice'; sliceId: string; pinned: boolean }
   | { type: 'user:promote_toc'; tocEntryId: string }
   | { type: 'user:reveal_hunk'; filePath: string; line: number }
-  | { type: 'user:query_mentions'; prefix: string };
+  | { type: 'user:query_mentions'; prefix: string }
+  | { type: 'user:switch_model' }
+  | { type: 'user:refresh_status' };
 
 /**
  * Union of all messages the extension host can send to the webview
  * via `webview.postMessage`.
  *
- * 5 message types: ledger:updated, stream:event, diff:queue_updated,
- * stream:text_delta, mentions:results.
+ * 6 message types: ledger:updated, stream:event, diff:queue_updated,
+ * stream:text_delta, mentions:results, status:updated.
  */
 export type HostToWebviewMessage =
   | { type: 'ledger:updated'; ledger: ContextLedgerSnapshot }
   | { type: 'stream:event'; event: TrueForgeStreamEvent }
   | { type: 'diff:queue_updated'; activeReview: StagedFileReview | null; queuedCount: number; canUndo: boolean }
   | { type: 'stream:text_delta'; delta: string }
-  | { type: 'mentions:results'; items: Array<{ label: string; filePath: string; kind: string }> };
+  | { type: 'mentions:results'; items: Array<{ label: string; filePath: string; kind: string }> }
+  | {
+      type: 'status:updated';
+      serverOnline: boolean;
+      modelOnline: boolean;
+      activeModel: string;
+      serverUrl?: string;
+    };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Undo Types

@@ -351,6 +351,7 @@ Show the application configuration as JSON.
         type: 'stream:event',
         event: { type: 'turn_complete' },
       });
+      panelProvider.broadcastStatus().catch(() => {});
     }
   }
 
@@ -364,6 +365,7 @@ Show the application configuration as JSON.
     async (prompt, mode) => {
       await runTurn(prompt, mode);
     },
+    modelSwitcher,
   );
 
   context.subscriptions.push(

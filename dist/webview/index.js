@@ -17,6 +17,13 @@
   var tokenBar = document.getElementById("token-bar");
   var ledgerSlices = document.getElementById("ledger-slices");
   var modelBadge = document.getElementById("model-badge");
+  var serverStatusPill = document.getElementById("server-status-pill");
+  var serverStatusDot = document.getElementById("server-status-dot");
+  var serverStatusText = document.getElementById("server-status-text");
+  var modelStatusDot = document.getElementById("model-status-dot");
+  var modelName = document.getElementById("model-name");
+  var modelStatusTag = document.getElementById("model-status-tag");
+  var btnRefresh = document.getElementById("btn-refresh-status");
   var currentReview = null;
   function doSubmit() {
     const prompt = promptInput.value.trim();
@@ -40,10 +47,16 @@
     }
   });
   modelBadge?.addEventListener("click", () => {
-    vscode.postMessage({
-      type: "user:query_mentions",
-      query: "@model"
-    });
+    vscode.postMessage({ type: "user:switch_model" });
+  });
+  btnRefresh?.addEventListener("click", () => {
+    if (btnRefresh) {
+      btnRefresh.style.transform = "rotate(180deg)";
+      setTimeout(() => {
+        if (btnRefresh) btnRefresh.style.transform = "";
+      }, 400);
+    }
+    vscode.postMessage({ type: "user:refresh_status" });
   });
   btnStop?.addEventListener("click", () => {
     vscode.postMessage({ type: "user:stop_generation" });
@@ -89,6 +102,9 @@
         break;
       case "diff:queue_updated":
         updateDiffQueue(msg.activeReview, msg.queuedCount);
+        break;
+      case "status:updated":
+        updateStatus(msg);
         break;
     }
   });
@@ -231,6 +247,37 @@
         }
       });
     });
+  }
+  function updateStatus(status) {
+    if (serverStatusDot && serverStatusText) {
+      if (status.serverOnline) {
+        serverStatusDot.className = "status-dot online pulsing";
+        serverStatusText.textContent = "Server: Online";
+        if (serverStatusPill) {
+          serverStatusPill.title = `Server: ${status.serverUrl || "http://localhost:3000"} (Healthy)`;
+        }
+      } else {
+        serverStatusDot.className = "status-dot offline";
+        serverStatusText.textContent = "Server: Offline";
+        if (serverStatusPill) {
+          serverStatusPill.title = `Server: ${status.serverUrl || "http://localhost:3000"} (Offline)`;
+        }
+      }
+    }
+    if (modelName) {
+      modelName.textContent = status.activeModel;
+    }
+    if (modelStatusDot && modelStatusTag) {
+      if (status.modelOnline) {
+        modelStatusDot.className = "status-dot-mini online";
+        modelStatusTag.className = "model-tag online";
+        modelStatusTag.textContent = "ONLINE";
+      } else {
+        modelStatusDot.className = "status-dot-mini offline";
+        modelStatusTag.className = "model-tag offline";
+        modelStatusTag.textContent = "OFFLINE";
+      }
+    }
   }
   function escapeHtml(str) {
     const div = document.createElement("div");

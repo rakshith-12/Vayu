@@ -37,6 +37,13 @@ const tokenUsage = document.getElementById('token-usage') as HTMLSpanElement;
 const tokenBar = document.getElementById('token-bar') as HTMLDivElement;
 const ledgerSlices = document.getElementById('ledger-slices') as HTMLDivElement;
 const modelBadge = document.getElementById('model-badge') as HTMLDivElement;
+const serverStatusPill = document.getElementById('server-status-pill') as HTMLDivElement | null;
+const serverStatusDot = document.getElementById('server-status-dot') as HTMLSpanElement | null;
+const serverStatusText = document.getElementById('server-status-text') as HTMLSpanElement | null;
+const modelStatusDot = document.getElementById('model-status-dot') as HTMLSpanElement | null;
+const modelName = document.getElementById('model-name') as HTMLSpanElement | null;
+const modelStatusTag = document.getElementById('model-status-tag') as HTMLSpanElement | null;
+const btnRefresh = document.getElementById('btn-refresh-status') as HTMLButtonElement | null;
 
 let currentReview: StagedFileReview | null = null;
 
@@ -68,10 +75,17 @@ promptInput?.addEventListener('keydown', (e: KeyboardEvent) => {
 });
 
 modelBadge?.addEventListener('click', () => {
-  vscode.postMessage({
-    type: 'user:query_mentions',
-    query: '@model',
-  });
+  vscode.postMessage({ type: 'user:switch_model' });
+});
+
+btnRefresh?.addEventListener('click', () => {
+  if (btnRefresh) {
+    btnRefresh.style.transform = 'rotate(180deg)';
+    setTimeout(() => {
+      if (btnRefresh) btnRefresh.style.transform = '';
+    }, 400);
+  }
+  vscode.postMessage({ type: 'user:refresh_status' });
 });
 
 btnStop?.addEventListener('click', () => {
@@ -125,6 +139,10 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
 
     case 'diff:queue_updated':
       updateDiffQueue(msg.activeReview, msg.queuedCount);
+      break;
+
+    case 'status:updated':
+      updateStatus(msg);
       break;
   }
 });
@@ -306,6 +324,46 @@ function updateDiffQueue(activeReview: StagedFileReview | null, queuedCount: num
       }
     });
   });
+}
+
+function updateStatus(status: {
+  serverOnline: boolean;
+  serverUrl?: string;
+  modelOnline: boolean;
+  activeModel: string;
+}) {
+  // Update Server Status Pill
+  if (serverStatusDot && serverStatusText) {
+    if (status.serverOnline) {
+      serverStatusDot.className = 'status-dot online pulsing';
+      serverStatusText.textContent = 'Server: Online';
+      if (serverStatusPill) {
+        serverStatusPill.title = `Server: ${status.serverUrl || 'http://localhost:3000'} (Healthy)`;
+      }
+    } else {
+      serverStatusDot.className = 'status-dot offline';
+      serverStatusText.textContent = 'Server: Offline';
+      if (serverStatusPill) {
+        serverStatusPill.title = `Server: ${status.serverUrl || 'http://localhost:3000'} (Offline)`;
+      }
+    }
+  }
+
+  // Update Model Chip & Tag
+  if (modelName) {
+    modelName.textContent = status.activeModel;
+  }
+  if (modelStatusDot && modelStatusTag) {
+    if (status.modelOnline) {
+      modelStatusDot.className = 'status-dot-mini online';
+      modelStatusTag.className = 'model-tag online';
+      modelStatusTag.textContent = 'ONLINE';
+    } else {
+      modelStatusDot.className = 'status-dot-mini offline';
+      modelStatusTag.className = 'model-tag offline';
+      modelStatusTag.textContent = 'OFFLINE';
+    }
+  }
 }
 
 function escapeHtml(str: string): string {
