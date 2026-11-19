@@ -2,7 +2,7 @@
  * @file index.ts
  * @description Frontend logic for TrueForge Webview UI.
  *              Handles state rendering for Context Ledger, Diff Review Drawer,
- *              Streaming Agent Output, Mention Autocomplete, and Prompt dispatch.
+ *              Streaming Agent Output, Mention Autocomplete, Model Switcher, and Prompt dispatch.
  */
 
 import type {
@@ -53,8 +53,13 @@ const ledgerSlices = document.getElementById('ledger-slices') as HTMLDivElement 
 
 const modelBadge = document.getElementById('model-badge') as HTMLElement | null;
 const modelLabel = document.getElementById('model-label') as HTMLSpanElement | null;
+const modelStatusTag = document.getElementById('model-status-tag') as HTMLSpanElement | null;
 const statusDot = document.getElementById('status-dot') as HTMLSpanElement | null;
 const sessionBadge = document.getElementById('session-badge') as HTMLSpanElement | null;
+const serverStatusPill = document.getElementById('server-status-pill') as HTMLElement | null;
+const btnRefresh = document.getElementById('btn-refresh-status') as HTMLButtonElement | null;
+const modelDrawer = document.getElementById('model-drawer') as HTMLDivElement | null;
+const modelDrawerList = document.getElementById('model-drawer-list') as HTMLDivElement | null;
 const uiToast = document.getElementById('ui-toast') as HTMLDivElement | null;
 
 type MentionItem = { label: string; filePath: string; kind: string };
@@ -66,6 +71,7 @@ let mentionItems: MentionItem[] = [];
 let mentionSelectedIndex = 0;
 let activeMentionRange: { start: number; end: number } | null = null;
 let mentionRequestActive = false;
+let isGeneratingStream = false;
 
 function resizePromptInput(): void {
   if (!promptInput) return;
@@ -87,15 +93,13 @@ function showToast(message: string): void {
 }
 
 function setStreamStatus(text: string, state: 'idle' | 'running' | 'done' | 'error'): void {
+  isGeneratingStream = state === 'running';
   if (streamStatus) {
     streamStatus.textContent = text;
     streamStatus.className = `stream-status-pill status-${state}`;
   }
   if (statusDot) {
-    statusDot.classList.toggle('generating', state === 'running');
-  }
-  if (sessionBadge) {
-    sessionBadge.textContent = state === 'running' ? 'Generating' : 'Connected';
+    statusDot.classList.toggle('generating', isGeneratingStream);
   }
 }
 
@@ -192,7 +196,6 @@ function detectAndQueryMention(): void {
 
   const fullToken = match[1];
   const rawQuery = match[2];
-  // Do not keep re-opening if user already typed an explicit @file:path or @symbol:name token with colon unless still editing file:
   if (rawQuery.startsWith('symbol:')) {
     closeMentionPopover();
     return;
@@ -237,7 +240,103 @@ function doSubmit(): void {
   setStreamStatus('Generating...', 'running');
 }
 
-// Composer & Header Event Listeners
+// Model Drawer rendering & status synchronization
+function updateStatus(status: {
+  serverOnline: boolean;
+  serverUrl?: string;
+  modelOnline: boolean;
+  activeModel: string;
+  availableModels?: Array<{ id: string; name: string }>;
+}): void {
+  // Update Server Status Pill
+  if (statusDot && sessionBadge) {
+    if (status.serverOnline) {
+      statusDot.className = isGeneratingStream ? 'status-dot pulsing generating' : 'status-dot pulsing';
+      sessionBadge.textContent = 'Server: Online';
+      if (serverStatusPill) {
+        serverStatusPill.className = 'status-pill';
+        serverStatusPill.title = `Server: ${status.serverUrl || 'http://localhost:3000'} (Healthy)`;
+      }
+    } else {
+      statusDot.className = 'status-dot offline';
+      sessionBadge.textContent = 'Server: Offline';
+      if (serverStatusPill) {
+        serverStatusPill.className = 'status-pill offline';
+        serverStatusPill.title = `Server: ${status.serverUrl || 'http://localhost:3000'} (Unreachable)`;
+      }
+    }
+  }
+
+  // Update Model Chip Label & Status Tag
+  if (modelLabel) {
+    modelLabel.textContent = status.activeModel;
+  }
+  if (modelStatusTag) {
+    if (status.modelOnline) {
+      modelStatusTag.className = 'model-tag online';
+      modelStatusTag.textContent = 'ONLINE';
+    } else {
+      modelStatusTag.className = 'model-tag offline';
+      modelStatusTag.textContent = 'OFFLINE';
+    }
+  }
+
+  // Update Model Drawer options
+  if (status.availableModels && status.availableModels.length > 0) {
+    renderModelDrawer(status.activeModel, status.availableModels);
+  }
+}
+
+function renderModelDrawer(activeModel: string, models: Array<{ id: string; name: string }>): void {
+  if (!modelDrawerList) return;
+  modelDrawerList.innerHTML = '';
+
+  for (const m of models) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    const isActive = m.id === activeModel || m.name === activeModel || m.id.endsWith(activeModel);
+    item.className = `model-option ${isActive ? 'active' : ''}`;
+    item.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+        <span style="font-weight: 600; font-size: 11px;">${escapeHtml(m.name || m.id)}</span>
+        ${isActive ? '<span style="color: var(--accent-primary); font-size: 10px;">✓ Active</span>' : ''}
+      </div>
+      <span style="font-size: 9.5px; color: var(--fg-muted);">${escapeHtml(m.id)}</span>
+    `;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      postToHost({
+        type: 'user:switch_model',
+        modelId: m.id,
+      });
+      if (modelDrawer) modelDrawer.style.display = 'none';
+      showToast(`Switched active model to ${m.name || m.id}`);
+    });
+    modelDrawerList.appendChild(item);
+  }
+
+  // QuickPick option at bottom
+  const qpItem = document.createElement('button');
+  qpItem.type = 'button';
+  qpItem.className = 'model-option';
+  qpItem.style.borderTop = '1px solid var(--border-subtle)';
+  qpItem.style.marginTop = '4px';
+  qpItem.style.paddingTop = '6px';
+  qpItem.innerHTML = `
+    <span style="font-size: 10.5px; color: var(--accent-primary); display: flex; align-items: center; gap: 5px;">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      Browse all models (QuickPick)...
+    </span>
+  `;
+  qpItem.addEventListener('click', (e) => {
+    e.stopPropagation();
+    postToHost({ type: 'user:switch_model' });
+    if (modelDrawer) modelDrawer.style.display = 'none';
+  });
+  modelDrawerList.appendChild(qpItem);
+}
+
+// Event Listeners
 btnSubmit?.addEventListener('click', doSubmit);
 
 promptInput?.addEventListener('input', () => {
@@ -297,9 +396,31 @@ btnMention?.addEventListener('click', () => {
   postToHost({ type: 'user:query_mentions', prefix: '' });
 });
 
+// Model Switcher Drawer toggle
+modelBadge?.addEventListener('click', (e: MouseEvent) => {
+  e.stopPropagation();
+  if (!modelDrawer) return;
+  const isHidden = modelDrawer.style.display === 'none' || !modelDrawer.style.display;
+  modelDrawer.style.display = isHidden ? 'block' : 'none';
+});
+
+// Refresh button trigger
+btnRefresh?.addEventListener('click', () => {
+  btnRefresh.style.transform = 'rotate(180deg)';
+  setTimeout(() => {
+    btnRefresh.style.transform = '';
+  }, 400);
+  postToHost({ type: 'user:refresh_status' });
+});
+
 document.addEventListener('click', (e: MouseEvent) => {
   if (inputSection && e.target instanceof Node && !inputSection.contains(e.target)) {
     closeMentionPopover();
+  }
+  if (modelDrawer && modelDrawer.style.display === 'block') {
+    if (!modelDrawer.contains(e.target as Node) && !modelBadge?.contains(e.target as Node)) {
+      modelDrawer.style.display = 'none';
+    }
   }
 });
 
@@ -313,10 +434,6 @@ document.querySelectorAll<HTMLButtonElement>('.quick-chip').forEach((chip) => {
     const len = promptInput.value.length;
     promptInput.setSelectionRange(len, len);
   });
-});
-
-modelBadge?.addEventListener('click', () => {
-  showToast('Switch model via Command Palette: Forge: Switch Active Model');
 });
 
 btnCopyStream?.addEventListener('click', async () => {
@@ -411,6 +528,10 @@ window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) =
         mentionSelectedIndex = 0;
         renderMentionPopover();
       }
+      break;
+
+    case 'status:updated':
+      updateStatus(msg);
       break;
   }
 });

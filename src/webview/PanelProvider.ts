@@ -387,7 +387,7 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       box-shadow: var(--inner-highlight);
       backdrop-filter: blur(10px);
       flex-shrink: 0;
-      z-index: 10;
+      z-index: 20;
     }
 
     .brand {
@@ -458,10 +458,17 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       background: var(--accent-green-bg);
       color: var(--accent-green);
       border: 1px solid color-mix(in srgb, var(--accent-green) 26%, transparent);
+      transition: all 0.2s ease;
     }
 
     body.vscode-light .status-pill {
       color: #047857;
+    }
+
+    .status-pill.offline {
+      background: var(--accent-red-bg);
+      color: var(--accent-red);
+      border-color: color-mix(in srgb, var(--accent-red) 26%, transparent);
     }
 
     .status-dot {
@@ -472,6 +479,12 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       background: var(--accent-green);
       box-shadow: 0 0 6px var(--accent-green);
       flex-shrink: 0;
+      transition: background 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .status-dot.offline {
+      background: var(--accent-red);
+      box-shadow: 0 0 6px var(--accent-red);
     }
 
     .status-dot.pulsing::after {
@@ -482,6 +495,10 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       border: 1.5px solid var(--accent-green);
       opacity: 0;
       animation: pulse-ring 2s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+    }
+
+    .status-dot.offline.pulsing::after {
+      border-color: var(--accent-red);
     }
 
     .status-dot.generating {
@@ -500,11 +517,18 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       100% { transform: scale(1.75); opacity: 0; }
     }
 
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
     .model-chip {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      max-width: 160px;
+      max-width: 175px;
       padding: 4px 8px;
       border-radius: var(--radius-sm);
       font-size: 10.5px;
@@ -536,6 +560,95 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .model-tag {
+      font-size: 8.5px;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      padding: 0 4px;
+      border-radius: var(--radius-xs);
+      line-height: 1.3;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+
+    .model-tag.online {
+      background: var(--accent-green-bg);
+      color: #34d399;
+      border: 1px solid color-mix(in srgb, var(--accent-green) 30%, transparent);
+    }
+
+    .model-tag.offline {
+      background: var(--accent-red-bg);
+      color: #f87171;
+      border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
+    }
+
+    /* Model Selection Dropdown Drawer */
+    .model-drawer {
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 12px;
+      width: 250px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-highlight);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-md);
+      backdrop-filter: blur(16px);
+      overflow: hidden;
+      z-index: 50;
+      animation: slide-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .drawer-header {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10.5px;
+      font-weight: 650;
+      color: var(--fg);
+    }
+
+    .drawer-sub {
+      font-size: 9px;
+      color: var(--fg-subtle);
+      font-weight: 400;
+    }
+
+    .model-options-list {
+      max-height: 180px;
+      overflow-y: auto;
+      padding: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .model-option {
+      padding: 6px 8px;
+      border-radius: var(--radius-xs);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      transition: background 0.12s ease;
+      background: transparent;
+      border: none;
+      text-align: left;
+      width: 100%;
+      color: var(--fg);
+    }
+
+    .model-option:hover {
+      background: var(--accent-blue-bg);
+    }
+
+    .model-option.active {
+      background: var(--accent-blue-bg);
+      border-left: 2px solid var(--accent-primary);
     }
 
     .ui-toast {
@@ -903,12 +1016,6 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     @keyframes slide-in {
       from { opacity: 0; transform: translateY(-6px); }
       to { opacity: 1; transform: translateY(0); }
-    }
-
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 5px;
     }
 
     .hunks-list {
@@ -1611,23 +1718,39 @@ export class PanelProvider implements vscode.WebviewViewProvider {
       <div class="brand-text">
         <div class="brand-title-row">
           <span class="brand-name">TrueForge</span>
-          <div class="status-pill">
+          <div class="status-pill" id="server-status-pill" title="Server: http://localhost:3000">
             <span class="status-dot pulsing" id="status-dot"></span>
-            <span id="session-badge">Connected</span>
+            <span id="session-badge">Server: Online</span>
           </div>
         </div>
         <span class="brand-subtitle">Editor-Native Coding Agent</span>
       </div>
     </div>
-    <button id="model-badge" type="button" class="model-chip" title="Active model • Run 'Forge: Switch Active Model' in Command Palette">
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-      </svg>
-      <span id="model-label">gemini-3.5-flash</span>
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-        <polyline points="6 9 12 15 18 9"/>
-      </svg>
-    </button>
+    <div class="header-actions">
+      <button id="btn-refresh-status" class="icon-btn" type="button" title="Refresh Server & Model Status" aria-label="Refresh Status">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/>
+        </svg>
+      </button>
+      <button id="model-badge" type="button" class="model-chip" title="Click to switch active model">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+        </svg>
+        <span id="model-label">gemini-3.5-flash-lite</span>
+        <span class="model-tag online" id="model-status-tag">ONLINE</span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+    </div>
+    <!-- Model Selection Drawer -->
+    <div id="model-drawer" class="model-drawer" style="display: none;">
+      <div class="drawer-header">
+        <span>Active Model Selection</span>
+        <span class="drawer-sub">Switch Active Model</span>
+      </div>
+      <div id="model-drawer-list" class="model-options-list"></div>
+    </div>
     <div id="ui-toast" class="ui-toast" role="status" aria-live="polite"></div>
   </header>
 
