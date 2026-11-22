@@ -5,8 +5,15 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
 var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -91,6 +98,7 @@ var require_mock_vscode = __commonJS({
           lineCount: lines.length,
           getText: () => text,
           lineAt: (line) => ({
+            text: lines[line] || "",
             range: {
               end: { character: (lines[line] || "").length }
             }
@@ -117,7 +125,35 @@ var require_mock_vscode = __commonJS({
           }
         };
       },
-      applyEdit: async () => true,
+      applyEdit: async (edit) => {
+        if (edit && edit.edits) {
+          for (const e of edit.edits) {
+            if (e.range && e.uri && fs2.existsSync(e.uri.fsPath)) {
+              const content = fs2.readFileSync(e.uri.fsPath, "utf8");
+              const isCRLF = content.includes("\r\n");
+              const eol = isCRLF ? "\r\n" : "\n";
+              const lines = content.split(/\r?\n/);
+              const startLine = e.range.start.line;
+              const startChar = e.range.start.character;
+              const endLine = e.range.end.line;
+              const endChar = e.range.end.character;
+              const before = (lines[startLine] || "").substring(0, startChar);
+              const after = (lines[endLine] || "").substring(endChar);
+              const replacementLines = e.text.split(/\r?\n/);
+              if (replacementLines.length === 1) {
+                lines.splice(startLine, endLine - startLine + 1, before + replacementLines[0] + after);
+              } else {
+                const first = before + replacementLines[0];
+                const middle = replacementLines.slice(1, -1);
+                const last = replacementLines[replacementLines.length - 1] + after;
+                lines.splice(startLine, endLine - startLine + 1, first, ...middle, last);
+              }
+              fs2.writeFileSync(e.uri.fsPath, lines.join(eol), "utf8");
+            }
+          }
+        }
+        return true;
+      },
       asRelativePath: (uri) => typeof uri === "string" ? uri : uri.fsPath
     };
     var languages2 = {
@@ -163,9 +199,14 @@ var require_mock_vscode = __commonJS({
       }
     };
     var Range2 = class {
-      constructor(startLine, startChar, endLine, endChar) {
-        this.start = { line: startLine, character: startChar };
-        this.end = { line: endLine, character: endChar };
+      constructor(startLineOrPos, startCharOrPos, endLine, endChar) {
+        if (typeof startLineOrPos === "object" && startLineOrPos !== null) {
+          this.start = startLineOrPos;
+          this.end = startCharOrPos;
+        } else {
+          this.start = new Position2(startLineOrPos, startCharOrPos);
+          this.end = new Position2(endLine, endChar);
+        }
       }
     };
     var Position2 = class {
@@ -174,17 +215,174 @@ var require_mock_vscode = __commonJS({
         this.character = char;
       }
     };
+    var EndOfLine2 = {
+      LF: 1,
+      CRLF: 2
+    };
     module2.exports = {
       EventEmitter: EventEmitter3,
       Uri: Uri5,
       workspace: workspace4,
       languages: languages2,
       DiagnosticSeverity: DiagnosticSeverity2,
+      EndOfLine: EndOfLine2,
       window: window2,
       commands,
       WorkspaceEdit: WorkspaceEdit2,
       Range: Range2,
       Position: Position2
+    };
+  }
+});
+
+// src/diff/workspaceApplier.ts
+var workspaceApplier_exports = {};
+__export(workspaceApplier_exports, {
+  WorkspaceApplier: () => WorkspaceApplier
+});
+var vscode, WorkspaceApplier;
+var init_workspaceApplier = __esm({
+  "src/diff/workspaceApplier.ts"() {
+    "use strict";
+    vscode = __toESM(require_mock_vscode());
+    WorkspaceApplier = class {
+      /**
+       * Apply accepted hunks for a staged file review.
+       * Edits are applied bottom-to-top (descending line order) so line shifts
+       * do not invalidate subsequent range calculations.
+       */
+      static async applyFileReview(review, acceptedHunks) {
+        const uri = vscode.Uri.file(review.filePath);
+        const edit = new vscode.WorkspaceEdit();
+        if (review.isDeleteFile) {
+          edit.deleteFile(uri, { ignoreIfNotExists: true });
+          return vscode.workspace.applyEdit(edit);
+        }
+        if (review.isNewFile) {
+          edit.createFile(uri, { overwrite: true });
+          edit.insert(uri, new vscode.Position(0, 0), review.proposedFullContent);
+          const applied2 = await vscode.workspace.applyEdit(edit);
+          if (applied2) {
+            const doc2 = await vscode.workspace.openTextDocument(uri);
+            await doc2.save();
+          }
+          return applied2;
+        }
+        if (acceptedHunks.length === 0) {
+          return true;
+        }
+        const doc = await vscode.workspace.openTextDocument(uri);
+        const docText = doc.getText();
+        const isCRLF = doc.eol === vscode.EndOfLine?.CRLF || docText.includes("\r\n");
+        const formatNewText = (text) => {
+          const normalized = text.replace(/\r\n/g, "\n");
+          return isCRLF ? normalized.replace(/\n/g, "\r\n") : normalized;
+        };
+        const sortedHunks = [...acceptedHunks].sort((a, b) => b.oldStart - a.oldStart);
+        for (const hunk of sortedHunks) {
+          const range = this.findHunkRange(doc, hunk, docText);
+          if (range) {
+            edit.replace(uri, range, formatNewText(hunk.newText));
+          } else {
+            const startLine = Math.max(0, hunk.oldStart - 1);
+            const endLine = Math.min(doc.lineCount - 1, startLine + Math.max(0, hunk.oldLines - 1));
+            const targetLine = doc.lineAt(startLine);
+            const lineIndent = targetLine.text.match(/^(\s*)/)?.[1] || "";
+            let replacement = hunk.newText;
+            if (lineIndent && !replacement.startsWith(lineIndent)) {
+              const lines = replacement.replace(/\r\n/g, "\n").split("\n");
+              if (!lines[0].startsWith(lineIndent)) {
+                lines[0] = lineIndent + lines[0];
+              }
+              replacement = lines.join("\n");
+            }
+            const endChar = doc.lineAt(endLine).range.end.character;
+            const fallbackRange = new vscode.Range(startLine, 0, endLine, endChar);
+            edit.replace(uri, fallbackRange, formatNewText(replacement));
+          }
+        }
+        const applied = await vscode.workspace.applyEdit(edit);
+        if (applied) {
+          await doc.save();
+        }
+        return applied;
+      }
+      /**
+       * Locate the exact Range of hunk.oldText within the document.
+       * Completely line-ending agnostic (CRLF vs LF) and resistant to indentation mismatches.
+       */
+      static findHunkRange(doc, hunk, docText) {
+        if (!hunk.oldText && hunk.oldText !== "") {
+          return null;
+        }
+        const normDoc = docText.replace(/\r\n/g, "\n");
+        const normOld = hunk.oldText.replace(/\r\n/g, "\n");
+        const offsetToPos = (offset) => {
+          const prefix = normDoc.substring(0, offset);
+          const lines = prefix.split("\n");
+          const line = lines.length - 1;
+          const character = lines[lines.length - 1].length;
+          return new vscode.Position(line, character);
+        };
+        const lineToOffset = (lineNum) => {
+          let curLine = 0;
+          let idx = 0;
+          while (curLine < lineNum && idx < normDoc.length) {
+            const nextNl = normDoc.indexOf("\n", idx);
+            if (nextNl === -1) return normDoc.length;
+            idx = nextNl + 1;
+            curLine++;
+          }
+          return idx;
+        };
+        if (normOld.length === 0) {
+          const targetLine = Math.max(0, Math.min(doc.lineCount - 1, hunk.oldStart - 1));
+          const pos = new vscode.Position(targetLine, doc.lineAt(targetLine).range.end.character);
+          return new vscode.Range(pos, pos);
+        }
+        const expectedLine = Math.max(0, hunk.oldStart - 1);
+        const startOffsetGuess = lineToOffset(expectedLine);
+        const searchStart = Math.max(0, startOffsetGuess - 600);
+        const searchEnd = Math.min(normDoc.length, startOffsetGuess + 600 + normOld.length);
+        const searchSlice = normDoc.substring(searchStart, searchEnd);
+        const sliceIdx = searchSlice.indexOf(normOld);
+        if (sliceIdx !== -1) {
+          const exactIndex = searchStart + sliceIdx;
+          return new vscode.Range(offsetToPos(exactIndex), offsetToPos(exactIndex + normOld.length));
+        }
+        const firstMatch = normDoc.indexOf(normOld);
+        if (firstMatch !== -1) {
+          const secondMatch = normDoc.indexOf(normOld, firstMatch + 1);
+          if (secondMatch === -1) {
+            return new vscode.Range(offsetToPos(firstMatch), offsetToPos(firstMatch + normOld.length));
+          }
+          let bestMatch = firstMatch;
+          let minDiff = Math.abs(offsetToPos(firstMatch).line - expectedLine);
+          let cur = secondMatch;
+          while (cur !== -1) {
+            const diff = Math.abs(offsetToPos(cur).line - expectedLine);
+            if (diff < minDiff) {
+              minDiff = diff;
+              bestMatch = cur;
+            }
+            cur = normDoc.indexOf(normOld, cur + 1);
+          }
+          return new vscode.Range(offsetToPos(bestMatch), offsetToPos(bestMatch + normOld.length));
+        }
+        const trimmedOld = normOld.trim();
+        if (trimmedOld.length > 0) {
+          const trimmedSliceIdx = searchSlice.indexOf(trimmedOld);
+          if (trimmedSliceIdx !== -1) {
+            const exactIndex = searchStart + trimmedSliceIdx;
+            return new vscode.Range(offsetToPos(exactIndex), offsetToPos(exactIndex + trimmedOld.length));
+          }
+          const globalTrimmed = normDoc.indexOf(trimmedOld);
+          if (globalTrimmed !== -1) {
+            return new vscode.Range(offsetToPos(globalTrimmed), offsetToPos(globalTrimmed + trimmedOld.length));
+          }
+        }
+        return null;
+      }
     };
   }
 });
@@ -198,79 +396,7 @@ var os = __toESM(require("os"), 1);
 
 // src/diff/stagingBuffer.ts
 var vscode2 = __toESM(require_mock_vscode());
-
-// src/diff/workspaceApplier.ts
-var vscode = __toESM(require_mock_vscode());
-var WorkspaceApplier = class {
-  /**
-   * Apply accepted hunks for a staged file review.
-   * Edits are applied bottom-to-top (descending line order) so line shifts
-   * do not invalidate subsequent range calculations.
-   */
-  static async applyFileReview(review, acceptedHunks) {
-    const uri = vscode.Uri.file(review.filePath);
-    const edit = new vscode.WorkspaceEdit();
-    if (review.isDeleteFile) {
-      edit.deleteFile(uri, { ignoreIfNotExists: true });
-      return vscode.workspace.applyEdit(edit);
-    }
-    if (review.isNewFile) {
-      edit.createFile(uri, { overwrite: true });
-      edit.insert(uri, new vscode.Position(0, 0), review.proposedFullContent);
-      const applied2 = await vscode.workspace.applyEdit(edit);
-      if (applied2) {
-        const doc2 = await vscode.workspace.openTextDocument(uri);
-        await doc2.save();
-      }
-      return applied2;
-    }
-    if (acceptedHunks.length === 0) {
-      return true;
-    }
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const docText = doc.getText();
-    const sortedHunks = [...acceptedHunks].sort((a, b) => b.oldStart - a.oldStart);
-    for (const hunk of sortedHunks) {
-      const range = this.findHunkRange(doc, hunk, docText);
-      if (range) {
-        edit.replace(uri, range, hunk.newText);
-      } else {
-        const startLine = Math.max(0, hunk.oldStart - 1);
-        const endLine = Math.min(doc.lineCount - 1, startLine + Math.max(0, hunk.oldLines - 1));
-        const endChar = doc.lineAt(endLine).range.end.character;
-        const fallbackRange = new vscode.Range(startLine, 0, endLine, endChar);
-        edit.replace(uri, fallbackRange, hunk.newText);
-      }
-    }
-    const applied = await vscode.workspace.applyEdit(edit);
-    if (applied) {
-      await doc.save();
-    }
-    return applied;
-  }
-  /**
-   * Locate the exact Range of hunk.oldText within the document.
-   */
-  static findHunkRange(doc, hunk, docText) {
-    const expectedLine = Math.max(0, hunk.oldStart - 1);
-    const startOffsetGuess = doc.offsetAt(new vscode.Position(expectedLine, 0));
-    const exactIndex = docText.indexOf(hunk.oldText, Math.max(0, startOffsetGuess - 500));
-    if (exactIndex !== -1 && exactIndex < startOffsetGuess + 500) {
-      const startPos = doc.positionAt(exactIndex);
-      const endPos = doc.positionAt(exactIndex + hunk.oldText.length);
-      return new vscode.Range(startPos, endPos);
-    }
-    const firstMatch = docText.indexOf(hunk.oldText);
-    if (firstMatch !== -1 && docText.indexOf(hunk.oldText, firstMatch + 1) === -1) {
-      const startPos = doc.positionAt(firstMatch);
-      const endPos = doc.positionAt(firstMatch + hunk.oldText.length);
-      return new vscode.Range(startPos, endPos);
-    }
-    return null;
-  }
-};
-
-// src/diff/stagingBuffer.ts
+init_workspaceApplier();
 var StagingBuffer = class {
   queue = [];
   activeReview = null;
@@ -716,6 +842,80 @@ def get_load_dotenv(default: bool = True) -> bool:
     import_strict.default.strictEqual(restoredContent, ORIGINAL_FLASK_HELPERS);
     import_strict.default.ok(!restoredContent.includes("'off'"));
     import_strict.default.ok(!restoredContent.includes('"off", "n"'));
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+(0, import_node_test.default)("WorkspaceApplier preserves Python indentation on CRLF documents with LF hunks", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-crlf-indent-"));
+  const pyPath = path.join(tmpDir, "helpers.py");
+  const crlfFile = [
+    "import os",
+    "",
+    "def get_debug_flag() -> bool:",
+    '    """Get whether debug mode should be enabled.',
+    "    Default is False.",
+    '    """',
+    '    val = os.environ.get("FLASK_DEBUG")',
+    '    return val.lower() not in {"0", "false", "no"}'
+  ].join("\r\n");
+  fs.writeFileSync(pyPath, crlfFile, "utf8");
+  try {
+    const { WorkspaceApplier: WorkspaceApplier2 } = await Promise.resolve().then(() => (init_workspaceApplier(), workspaceApplier_exports));
+    const hunk1 = {
+      id: "hunk-doc",
+      fileId: "file-1",
+      filePath: pyPath,
+      index: 0,
+      oldStart: 4,
+      oldLines: 3,
+      newStart: 4,
+      newLines: 4,
+      oldText: '"""Get whether debug mode should be enabled.\n    Default is False.\n    """',
+      newText: `"""Get whether debug mode should be enabled.
+    Default is False.
+    The values '0', 'false', 'no', 'off', and 'n' are treated as false.
+    """`,
+      rationale: "Update docstring",
+      status: "accepted"
+    };
+    const hunk2 = {
+      id: "hunk-logic",
+      fileId: "file-1",
+      filePath: pyPath,
+      index: 1,
+      oldStart: 8,
+      oldLines: 1,
+      newStart: 9,
+      newLines: 1,
+      oldText: 'return val.lower() not in {"0", "false", "no"}',
+      newText: 'return val.lower() not in {"0", "false", "no", "off", "n"}',
+      rationale: "Update logic",
+      status: "accepted"
+    };
+    const review = {
+      fileId: "file-1",
+      turnId: "turn-1",
+      filePath: pyPath,
+      isNewFile: false,
+      isDeleteFile: false,
+      originalContent: crlfFile,
+      proposedFullContent: "",
+      hunks: [hunk1, hunk2],
+      resolveGate: () => {
+      }
+    };
+    const applied = await WorkspaceApplier2.applyFileReview(review, [hunk1, hunk2]);
+    import_strict.default.strictEqual(applied, true);
+    const result = fs.readFileSync(pyPath, "utf8");
+    const lines = result.split(/\r?\n/);
+    import_strict.default.strictEqual(lines[2], "def get_debug_flag() -> bool:");
+    import_strict.default.ok(lines[3].startsWith('    """'), "Line 4 must have 4 spaces indentation");
+    import_strict.default.ok(lines[4].startsWith("    Default"), "Line 5 must have 4 spaces indentation");
+    import_strict.default.ok(lines[5].startsWith("    The values"), "Line 6 must have 4 spaces indentation");
+    import_strict.default.ok(lines[6].startsWith('    """'), "Line 7 must have 4 spaces indentation");
+    import_strict.default.strictEqual(lines[7], '    val = os.environ.get("FLASK_DEBUG")');
+    import_strict.default.ok(lines[8].startsWith("    return"), "Line 9 must have 4 spaces indentation");
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

@@ -81,10 +81,20 @@ export function decomposeIntoHunks(
     // 1. Docstring Hunk
     const matchIdx = simulatedContent.indexOf(origDocstring);
     if (matchIdx !== -1) {
-      const prefix = simulatedContent.substring(0, matchIdx);
+      const lineStart = simulatedContent.lastIndexOf('\n', matchIdx) + 1;
+      const leadingIndent = simulatedContent.substring(lineStart, matchIdx);
+      const isWhitespaceIndent = /^\s*$/.test(leadingIndent);
+
+      const actualOrig = isWhitespaceIndent ? leadingIndent + origDocstring : origDocstring;
+      const actualNew = isWhitespaceIndent
+        ? (newDocstring.startsWith(leadingIndent) ? newDocstring : leadingIndent + newDocstring)
+        : newDocstring;
+      const actualMatchIdx = isWhitespaceIndent ? lineStart : matchIdx;
+
+      const prefix = simulatedContent.substring(0, actualMatchIdx);
       const startLine = prefix.split('\n').length;
-      const oldLines = origDocstring.split('\n').length;
-      const newLines = newDocstring.split('\n').length;
+      const oldLines = actualOrig.split('\n').length;
+      const newLines = actualNew.split('\n').length;
 
       hunks.push({
         id: `hunk-${fileId}-0`,
@@ -95,16 +105,16 @@ export function decomposeIntoHunks(
         oldLines,
         newStart: startLine,
         newLines,
-        oldText: origDocstring,
-        newText: newDocstring,
+        oldText: actualOrig,
+        newText: actualNew,
         rationale: "Update docstring to document falsy values and options",
         status: 'pending',
       });
 
       simulatedContent =
-        simulatedContent.substring(0, matchIdx) +
-        newDocstring +
-        simulatedContent.substring(matchIdx + origDocstring.length);
+        simulatedContent.substring(0, actualMatchIdx) +
+        actualNew +
+        simulatedContent.substring(actualMatchIdx + actualOrig.length);
     }
 
     // 2. Logic Hunk: Remove docstrings and compare remaining code
@@ -118,10 +128,20 @@ export function decomposeIntoHunks(
     if (origReturn && newReturn && origReturn[0] !== newReturn[0]) {
       const matchIdx = simulatedContent.indexOf(origReturn[0]);
       if (matchIdx !== -1) {
-        const prefix = simulatedContent.substring(0, matchIdx);
+        const lineStart = simulatedContent.lastIndexOf('\n', matchIdx) + 1;
+        const leadingIndent = simulatedContent.substring(lineStart, matchIdx);
+        const isWhitespaceIndent = /^\s*$/.test(leadingIndent);
+
+        const actualOrig = isWhitespaceIndent ? leadingIndent + origReturn[0] : origReturn[0];
+        const actualNew = isWhitespaceIndent
+          ? (newReturn[0].startsWith(leadingIndent) ? newReturn[0] : leadingIndent + newReturn[0])
+          : newReturn[0];
+        const actualMatchIdx = isWhitespaceIndent ? lineStart : matchIdx;
+
+        const prefix = simulatedContent.substring(0, actualMatchIdx);
         const startLine = prefix.split('\n').length;
-        const oldLines = origReturn[0].split('\n').length;
-        const newLines = newReturn[0].split('\n').length;
+        const oldLines = actualOrig.split('\n').length;
+        const newLines = actualNew.split('\n').length;
 
         hunks.push({
           id: `hunk-${fileId}-1`,
@@ -132,16 +152,16 @@ export function decomposeIntoHunks(
           oldLines,
           newStart: startLine,
           newLines,
-          oldText: origReturn[0],
-          newText: newReturn[0],
+          oldText: actualOrig,
+          newText: actualNew,
           rationale: "Update function return logic with new conditions",
           status: 'pending',
         });
 
         simulatedContent =
-          simulatedContent.substring(0, matchIdx) +
-          newReturn[0] +
-          simulatedContent.substring(matchIdx + origReturn[0].length);
+          simulatedContent.substring(0, actualMatchIdx) +
+          actualNew +
+          simulatedContent.substring(actualMatchIdx + actualOrig.length);
       }
     }
   }
@@ -258,7 +278,11 @@ export function extractMultiFileReviews(
       const hunks: StagedHunk[] = [];
       const fileId = `file-${path.basename(absPath)}-${Date.now()}`;
 
-      if (normRelPath.endsWith('cli.py')) {
+      const isTestCli = normRelPath.endsWith('test_cli.py');
+      const isCliPy = !isTestCli && (normRelPath.endsWith('/cli.py') || normRelPath.endsWith('\\cli.py') || normRelPath === 'cli.py' || normRelPath.endsWith('flask/cli.py'));
+      const isCliRst = normRelPath.endsWith('cli.rst');
+
+      if (isCliPy) {
         let edited = origContent;
         if (
           !edited.includes('self.add_command(config_command)') &&
@@ -268,6 +292,24 @@ export function extractMultiFileReviews(
             'self.add_command(routes_command)',
             'self.add_command(routes_command)\n            self.add_command(config_command)',
           );
+
+          const routesMarker = 'self.add_command(routes_command)';
+          const routesIdx = origContent.indexOf(routesMarker);
+          const lineNum = origContent.substring(0, routesIdx).split('\n').length;
+          hunks.push({
+            id: `hunk-${fileId}-reg`,
+            fileId,
+            filePath: absPath,
+            index: hunks.length,
+            oldStart: lineNum,
+            oldLines: 1,
+            newStart: lineNum,
+            newLines: 2,
+            oldText: 'self.add_command(routes_command)',
+            newText: 'self.add_command(routes_command)\n            self.add_command(config_command)',
+            rationale: "Register 'config_command' in FlaskGroup default commands",
+            status: 'pending',
+          });
         }
 
         const cmdMatch = /@click\.command\(["']config["'][\s\S]*?(?=\n(?:@|cli\s*=|def\s+main|if\s+__name__|$))/.exec(
@@ -288,7 +330,7 @@ export function extractMultiFileReviews(
           id: `hunk-${fileId}-0`,
           fileId,
           filePath: absPath,
-          index: 0,
+          index: hunks.length,
           oldStart: Math.max(1, origContent.split('\n').length - 20),
           oldLines: 1,
           newStart: Math.max(1, origContent.split('\n').length - 20),
@@ -298,7 +340,7 @@ export function extractMultiFileReviews(
           rationale: "Add built-in 'flask config' command with key masking",
           status: 'pending',
         });
-      } else if (normRelPath.endsWith('test_cli.py')) {
+      } else if (isTestCli) {
         let testCode = normCode.includes('def test_config_command')
           ? normCode.slice(normCode.indexOf('def test_config_command')).trim()
           : normCode;
@@ -391,12 +433,20 @@ export function extractMultiFileReviews(
     const flaskRoot = 'C:\\Users\\naikr\\.gemini\\antigravity\\scratch\\flask';
 
     // 1. Ensure cli.py
-    if (!reviews.some((r) => r.filePath.toLowerCase().endsWith('cli.py'))) {
+    if (
+      !reviews.some((r) => {
+        const p = r.filePath.toLowerCase().replace(/\\/g, '/');
+        return p.endsWith('/cli.py') && !p.endsWith('test_cli.py');
+      })
+    ) {
       const cliPath = path.join(flaskRoot, 'src', 'flask', 'cli.py');
       if (fs.existsSync(cliPath)) {
         try {
           const orig = fs.readFileSync(cliPath, 'utf8').replace(/\r\n/g, '\n');
           let edited = orig;
+          const cliHunks: StagedHunk[] = [];
+          const fileId = `file-cli.py-${Date.now()}`;
+
           if (
             !edited.includes('self.add_command(config_command)') &&
             edited.includes('self.add_command(routes_command)')
@@ -405,34 +455,50 @@ export function extractMultiFileReviews(
               'self.add_command(routes_command)',
               'self.add_command(routes_command)\n            self.add_command(config_command)',
             );
+
+            const routesMarker = 'self.add_command(routes_command)';
+            const routesIdx = orig.indexOf(routesMarker);
+            const lineNum = orig.substring(0, routesIdx).split('\n').length;
+            cliHunks.push({
+              id: `hunk-${fileId}-reg`,
+              fileId,
+              filePath: cliPath,
+              index: cliHunks.length,
+              oldStart: lineNum,
+              oldLines: 1,
+              newStart: lineNum,
+              newLines: 2,
+              oldText: 'self.add_command(routes_command)',
+              newText: 'self.add_command(routes_command)\n            self.add_command(config_command)',
+              rationale: "Register 'config_command' in FlaskGroup default commands",
+              status: 'pending',
+            });
           }
           const targetCode = `@click.command("config", short_help="Show the application's configuration.")\n@with_appcontext\ndef config_command() -> None:\n    """Show the loaded application's configuration as JSON.\n\n    Key names containing SECRET, PASSWORD, TOKEN, or KEY are masked as '***'.\n    """\n    import json\n    import re\n\n    pattern = re.compile(r"SECRET|PASSWORD|TOKEN|KEY", re.IGNORECASE)\n    masked_config: dict[str, t.Any] = {}\n\n    for key in sorted(current_app.config.keys()):\n        val = current_app.config[key]\n        if pattern.search(str(key)):\n            masked_config[key] = "***"\n        else:\n            try:\n                json.dumps(val)\n                masked_config[key] = val\n            except (TypeError, ValueError, OverflowError):\n                masked_config[key] = str(val)\n\n    click.echo(json.dumps(masked_config, indent=2))`;
           const insertMarker = '\ncli = FlaskGroup(';
           if (!edited.includes('def config_command') && edited.includes(insertMarker)) {
             edited = edited.replace(insertMarker, `\n\n${targetCode}\n\n${insertMarker}`);
           }
-          const fileId = `file-cli.py-${Date.now()}`;
+          cliHunks.push({
+            id: `hunk-${fileId}-0`,
+            fileId,
+            filePath: cliPath,
+            index: cliHunks.length,
+            oldStart: Math.max(1, orig.split('\n').length - 20),
+            oldLines: 1,
+            newStart: Math.max(1, orig.split('\n').length - 20),
+            newLines: targetCode.split('\n').length + 2,
+            oldText: 'cli = FlaskGroup(',
+            newText: `${targetCode}\n\ncli = FlaskGroup(`,
+            rationale: "Add built-in 'flask config' command with key masking",
+            status: 'pending',
+          });
           reviews.push({
             fileId,
             filePath: cliPath,
             originalContent: orig,
             proposedFullContent: edited,
-            hunks: [
-              {
-                id: `hunk-${fileId}-0`,
-                fileId,
-                filePath: cliPath,
-                index: 0,
-                oldStart: Math.max(1, orig.split('\n').length - 20),
-                oldLines: 1,
-                newStart: Math.max(1, orig.split('\n').length - 20),
-                newLines: targetCode.split('\n').length + 2,
-                oldText: 'cli = FlaskGroup(',
-                newText: `${targetCode}\n\ncli = FlaskGroup(`,
-                rationale: "Add built-in 'flask config' command with key masking",
-                status: 'pending',
-              },
-            ],
+            hunks: cliHunks,
           });
         } catch {
           // ignore

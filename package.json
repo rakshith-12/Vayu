@@ -1,6 +1,6 @@
 {
   "name": "forge-vscode-agent",
-  "displayName": "TrueForge Coding Agent",
+  "displayName": "Vayu - TrueForge Coding Agent",
   "description": "Editor-native VS Code coding agent powered by TrueForge",
   "version": "1.0.0",
   "publisher": "trueforge-team",
@@ -20,7 +20,7 @@
       "activitybar": [
         {
           "id": "trueforge-sidebar",
-          "title": "TrueForge Agent",
+          "title": "Vayu Agent",
           "icon": "media/forge-icon.svg"
         }
       ]
@@ -101,12 +101,12 @@
         },
         "trueforge.primaryModel": {
           "type": "string",
-          "default": "primary-coding-model",
+          "default": "google-gemini/gemini-3-5-flash-lite",
           "description": "Primary model identifier configured in TrueForge"
         },
         "trueforge.fallbackModel": {
           "type": "string",
-          "default": "secondary-fallback-model",
+          "default": "openrouter/nemotron-3-ultra-free",
           "description": "Fallback model identifier for automatic failover"
         }
       }

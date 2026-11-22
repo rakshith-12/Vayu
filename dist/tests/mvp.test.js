@@ -91,6 +91,7 @@ var require_mock_vscode = __commonJS({
           lineCount: lines.length,
           getText: () => text,
           lineAt: (line) => ({
+            text: lines[line] || "",
             range: {
               end: { character: (lines[line] || "").length }
             }
@@ -117,7 +118,35 @@ var require_mock_vscode = __commonJS({
           }
         };
       },
-      applyEdit: async () => true,
+      applyEdit: async (edit) => {
+        if (edit && edit.edits) {
+          for (const e of edit.edits) {
+            if (e.range && e.uri && fs2.existsSync(e.uri.fsPath)) {
+              const content = fs2.readFileSync(e.uri.fsPath, "utf8");
+              const isCRLF = content.includes("\r\n");
+              const eol = isCRLF ? "\r\n" : "\n";
+              const lines = content.split(/\r?\n/);
+              const startLine = e.range.start.line;
+              const startChar = e.range.start.character;
+              const endLine = e.range.end.line;
+              const endChar = e.range.end.character;
+              const before = (lines[startLine] || "").substring(0, startChar);
+              const after = (lines[endLine] || "").substring(endChar);
+              const replacementLines = e.text.split(/\r?\n/);
+              if (replacementLines.length === 1) {
+                lines.splice(startLine, endLine - startLine + 1, before + replacementLines[0] + after);
+              } else {
+                const first = before + replacementLines[0];
+                const middle = replacementLines.slice(1, -1);
+                const last = replacementLines[replacementLines.length - 1] + after;
+                lines.splice(startLine, endLine - startLine + 1, first, ...middle, last);
+              }
+              fs2.writeFileSync(e.uri.fsPath, lines.join(eol), "utf8");
+            }
+          }
+        }
+        return true;
+      },
       asRelativePath: (uri) => typeof uri === "string" ? uri : uri.fsPath
     };
     var languages = {
@@ -163,9 +192,14 @@ var require_mock_vscode = __commonJS({
       }
     };
     var Range = class {
-      constructor(startLine, startChar, endLine, endChar) {
-        this.start = { line: startLine, character: startChar };
-        this.end = { line: endLine, character: endChar };
+      constructor(startLineOrPos, startCharOrPos, endLine, endChar) {
+        if (typeof startLineOrPos === "object" && startLineOrPos !== null) {
+          this.start = startLineOrPos;
+          this.end = startCharOrPos;
+        } else {
+          this.start = new Position(startLineOrPos, startCharOrPos);
+          this.end = new Position(endLine, endChar);
+        }
       }
     };
     var Position = class {
@@ -174,12 +208,17 @@ var require_mock_vscode = __commonJS({
         this.character = char;
       }
     };
+    var EndOfLine = {
+      LF: 1,
+      CRLF: 2
+    };
     module2.exports = {
       EventEmitter: EventEmitter2,
       Uri,
       workspace,
       languages,
       DiagnosticSeverity,
+      EndOfLine,
       window,
       commands,
       WorkspaceEdit,

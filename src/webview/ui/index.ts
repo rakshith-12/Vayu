@@ -44,8 +44,11 @@ const modelStatusDot = document.getElementById('model-status-dot') as HTMLSpanEl
 const modelName = document.getElementById('model-name') as HTMLSpanElement | null;
 const modelStatusTag = document.getElementById('model-status-tag') as HTMLSpanElement | null;
 const btnRefresh = document.getElementById('btn-refresh-status') as HTMLButtonElement | null;
+const modelDrawer = document.getElementById('model-drawer') as HTMLDivElement | null;
+const modelDrawerList = document.getElementById('model-drawer-list') as HTMLDivElement | null;
 
 let currentReview: StagedFileReview | null = null;
+let cachedModels: Array<{ id: string; name: string }> = [];
 
 function doSubmit() {
   const prompt = promptInput.value.trim();
@@ -74,17 +77,29 @@ promptInput?.addEventListener('keydown', (e: KeyboardEvent) => {
   }
 });
 
-modelBadge?.addEventListener('click', () => {
-  vscode.postMessage({ type: 'user:switch_model' });
+// Model switcher drawer toggle
+modelBadge?.addEventListener('click', (e: MouseEvent) => {
+  e.stopPropagation();
+  if (!modelDrawer) return;
+  const isHidden = modelDrawer.style.display === 'none' || !modelDrawer.style.display;
+  modelDrawer.style.display = isHidden ? 'block' : 'none';
 });
 
-btnRefresh?.addEventListener('click', () => {
-  if (btnRefresh) {
-    btnRefresh.style.transform = 'rotate(180deg)';
-    setTimeout(() => {
-      if (btnRefresh) btnRefresh.style.transform = '';
-    }, 400);
+// Close model drawer on outside click
+document.addEventListener('click', (e: MouseEvent) => {
+  if (modelDrawer && modelDrawer.style.display === 'block') {
+    if (!modelDrawer.contains(e.target as Node) && !modelBadge?.contains(e.target as Node)) {
+      modelDrawer.style.display = 'none';
+    }
   }
+});
+
+// Refresh button trigger
+btnRefresh?.addEventListener('click', () => {
+  btnRefresh.style.transform = 'rotate(180deg)';
+  setTimeout(() => {
+    btnRefresh.style.transform = '';
+  }, 400);
   vscode.postMessage({ type: 'user:refresh_status' });
 });
 
@@ -331,11 +346,12 @@ function updateStatus(status: {
   serverUrl?: string;
   modelOnline: boolean;
   activeModel: string;
+  availableModels?: Array<{ id: string; name: string }>;
 }) {
   // Update Server Status Pill
   if (serverStatusDot && serverStatusText) {
     if (status.serverOnline) {
-      serverStatusDot.className = 'status-dot online pulsing';
+      serverStatusDot.className = 'status-dot pulsing online';
       serverStatusText.textContent = 'Server: Online';
       if (serverStatusPill) {
         serverStatusPill.title = `Server: ${status.serverUrl || 'http://localhost:3000'} (Healthy)`;
@@ -344,12 +360,12 @@ function updateStatus(status: {
       serverStatusDot.className = 'status-dot offline';
       serverStatusText.textContent = 'Server: Offline';
       if (serverStatusPill) {
-        serverStatusPill.title = `Server: ${status.serverUrl || 'http://localhost:3000'} (Offline)`;
+        serverStatusPill.title = `Server: ${status.serverUrl || 'http://localhost:3000'} (Unreachable)`;
       }
     }
   }
 
-  // Update Model Chip & Tag
+  // Update Model Chip & Status Tag
   if (modelName) {
     modelName.textContent = status.activeModel;
   }
@@ -364,6 +380,57 @@ function updateStatus(status: {
       modelStatusTag.textContent = 'OFFLINE';
     }
   }
+
+  // Populate/Refresh Model Dropdown Drawer
+  if (status.availableModels && status.availableModels.length > 0) {
+    cachedModels = status.availableModels;
+    renderModelDrawer(status.activeModel, cachedModels);
+  }
+}
+
+function renderModelDrawer(activeModel: string, models: Array<{ id: string; name: string }>) {
+  if (!modelDrawerList) return;
+  modelDrawerList.innerHTML = '';
+
+  for (const m of models) {
+    const item = document.createElement('div');
+    const isActive = m.id === activeModel || m.name === activeModel || m.id.endsWith(activeModel);
+    item.className = `model-option ${isActive ? 'active' : ''}`;
+    item.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-weight: 500; font-size: 11px;">${escapeHtml(m.name || m.id)}</span>
+        ${isActive ? '<span style="color: var(--accent-blue); font-size: 10px;">✓ Active</span>' : ''}
+      </div>
+      <span style="font-size: 9.5px; color: var(--fg-muted);">${escapeHtml(m.id)}</span>
+    `;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      vscode.postMessage({
+        type: 'user:switch_model',
+        modelId: m.id,
+      });
+      if (modelDrawer) modelDrawer.style.display = 'none';
+    });
+    modelDrawerList.appendChild(item);
+  }
+
+  // QuickPick option at the bottom
+  const qpItem = document.createElement('div');
+  qpItem.className = 'model-option';
+  qpItem.style.borderTop = '1px solid var(--border)';
+  qpItem.style.marginTop = '4px';
+  qpItem.style.paddingTop = '6px';
+  qpItem.innerHTML = `
+    <span style="font-size: 10.5px; color: var(--accent-blue); display: flex; align-items: center; gap: 4px;">
+      <span>🔍</span> Browse all models (QuickPick)...
+    </span>
+  `;
+  qpItem.addEventListener('click', (e) => {
+    e.stopPropagation();
+    vscode.postMessage({ type: 'user:switch_model' });
+    if (modelDrawer) modelDrawer.style.display = 'none';
+  });
+  modelDrawerList.appendChild(qpItem);
 }
 
 function escapeHtml(str: string): string {

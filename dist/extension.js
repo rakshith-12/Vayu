@@ -30515,7 +30515,10 @@ var TrueForgeClient = class {
     this.serverUrl = serverUrl.replace(/\/+$/, "");
     this.agentId = agentId;
     this.streamHandler = new StreamHandler();
-    this.resilience = new ResilienceSupervisor();
+    this.resilience = new ResilienceSupervisor({
+      primaryModel: "google-gemini/gemini-3-5-flash-lite",
+      fallbackModel: "openrouter/nemotron-3-ultra-free"
+    });
   }
   /**
    * Produce candidate base URLs to transparently handle IPv4 (127.0.0.1) and IPv6 (localhost / ::1).
@@ -30538,6 +30541,13 @@ var TrueForgeClient = class {
     }
     return Array.from(new Set(list));
   }
+  setActiveModel(modelId) {
+    this.resilience.setCurrentModel(modelId);
+    this.activeSessionId = null;
+  }
+  getActiveModel() {
+    return this.resilience.getCurrentModel();
+  }
   // ---------------------------------------------------------------------------
   // Session lifecycle
   // ---------------------------------------------------------------------------
@@ -30547,8 +30557,19 @@ var TrueForgeClient = class {
     for (const base of candidateBases) {
       urls.push(`${base}/api/v1/sessions`);
     }
+    const activeModel = this.resilience.getCurrentModel();
     const body = JSON.stringify({
-      agent: { name: this.agentId },
+      agent: {
+        spec: {
+          model: { name: activeModel || "google-gemini/gemini-3-5-flash-lite" },
+          instructions: "You are an editor-native coding assistant. When modifying code across files, provide the exact replacement code blocks for each file clearly labeled. Do not spawn sub-agents.",
+          config: {
+            dynamic_sub_agents: { enabled: false },
+            ask_user_questions: { enabled: false },
+            web_search: { enabled: false }
+          }
+        }
+      },
       metadata: options?.mcpPort ? { mcpPort: String(options.mcpPort) } : {}
     });
     const response = await this.resilience.executeTurnWithFailover(async (signal) => {
@@ -30733,12 +30754,16 @@ ${prompt}` : prompt;
       }
       return [
         { id: "google-gemini/gemini-3-5-flash-lite", name: "Gemini 3.5 Flash-Lite" },
+        { id: "openrouter/nemotron-3-ultra-free", name: "Nemotron 3 Ultra (Free)" },
         { id: "google-gemini/gemini-3-1-flash-lite", name: "Gemini 3.1 Flash-Lite" }
       ];
     });
   }
   get currentSessionId() {
     return this.activeSessionId;
+  }
+  resetSession() {
+    this.activeSessionId = null;
   }
 };
 
@@ -30748,7 +30773,8 @@ var ModelSwitcher = class {
   constructor(client, initialModel) {
     this.client = client;
     const config2 = vscode3.workspace.getConfiguration("trueforge");
-    this.activeModel = initialModel || config2.get("primaryModel") || "primary-coding-model";
+    this.activeModel = initialModel || config2.get("primaryModel") || "google-gemini/gemini-3-5-flash-lite";
+    this.client.setActiveModel(this.activeModel);
   }
   activeModel;
   onDidChangeModelEmitter = new vscode3.EventEmitter();
@@ -30759,6 +30785,7 @@ var ModelSwitcher = class {
   setActiveModel(modelId) {
     if (this.activeModel !== modelId) {
       this.activeModel = modelId;
+      this.client.setActiveModel(modelId);
       this.onDidChangeModelEmitter.fire(modelId);
       vscode3.workspace.getConfiguration("trueforge").update("primaryModel", modelId, vscode3.ConfigurationTarget.Global).then(void 0, () => {
       });
@@ -30773,14 +30800,16 @@ var ModelSwitcher = class {
       models = await this.client.listModels();
     } catch {
       models = [
-        { id: "primary-coding-model", name: "Primary Coding Model" },
-        { id: "secondary-fallback-model", name: "Secondary Fallback Model" }
+        { id: "google-gemini/gemini-3-5-flash-lite", name: "Gemini 3.5 Flash-Lite" },
+        { id: "openrouter/nemotron-3-ultra-free", name: "Nemotron 3 Ultra (Free)" },
+        { id: "google-gemini/gemini-3-1-flash-lite", name: "Gemini 3.1 Flash-Lite" }
       ];
     }
     if (models.length === 0) {
       models = [
-        { id: "primary-coding-model", name: "Primary Coding Model" },
-        { id: "secondary-fallback-model", name: "Secondary Fallback Model" }
+        { id: "google-gemini/gemini-3-5-flash-lite", name: "Gemini 3.5 Flash-Lite" },
+        { id: "openrouter/nemotron-3-ultra-free", name: "Nemotron 3 Ultra (Free)" },
+        { id: "google-gemini/gemini-3-1-flash-lite", name: "Gemini 3.1 Flash-Lite" }
       ];
     }
     const items = models.map((m) => {
@@ -30900,17 +30929,32 @@ var WorkspaceApplier = class {
     }
     const doc = await vscode4.workspace.openTextDocument(uri);
     const docText = doc.getText();
+    const isCRLF = doc.eol === vscode4.EndOfLine?.CRLF || docText.includes("\r\n");
+    const formatNewText = (text) => {
+      const normalized = text.replace(/\r\n/g, "\n");
+      return isCRLF ? normalized.replace(/\n/g, "\r\n") : normalized;
+    };
     const sortedHunks = [...acceptedHunks].sort((a, b) => b.oldStart - a.oldStart);
     for (const hunk of sortedHunks) {
       const range = this.findHunkRange(doc, hunk, docText);
       if (range) {
-        edit.replace(uri, range, hunk.newText);
+        edit.replace(uri, range, formatNewText(hunk.newText));
       } else {
         const startLine = Math.max(0, hunk.oldStart - 1);
         const endLine = Math.min(doc.lineCount - 1, startLine + Math.max(0, hunk.oldLines - 1));
+        const targetLine = doc.lineAt(startLine);
+        const lineIndent = targetLine.text.match(/^(\s*)/)?.[1] || "";
+        let replacement = hunk.newText;
+        if (lineIndent && !replacement.startsWith(lineIndent)) {
+          const lines = replacement.replace(/\r\n/g, "\n").split("\n");
+          if (!lines[0].startsWith(lineIndent)) {
+            lines[0] = lineIndent + lines[0];
+          }
+          replacement = lines.join("\n");
+        }
         const endChar = doc.lineAt(endLine).range.end.character;
         const fallbackRange = new vscode4.Range(startLine, 0, endLine, endChar);
-        edit.replace(uri, fallbackRange, hunk.newText);
+        edit.replace(uri, fallbackRange, formatNewText(replacement));
       }
     }
     const applied = await vscode4.workspace.applyEdit(edit);
@@ -30921,21 +30965,77 @@ var WorkspaceApplier = class {
   }
   /**
    * Locate the exact Range of hunk.oldText within the document.
+   * Completely line-ending agnostic (CRLF vs LF) and resistant to indentation mismatches.
    */
   static findHunkRange(doc, hunk, docText) {
-    const expectedLine = Math.max(0, hunk.oldStart - 1);
-    const startOffsetGuess = doc.offsetAt(new vscode4.Position(expectedLine, 0));
-    const exactIndex = docText.indexOf(hunk.oldText, Math.max(0, startOffsetGuess - 500));
-    if (exactIndex !== -1 && exactIndex < startOffsetGuess + 500) {
-      const startPos = doc.positionAt(exactIndex);
-      const endPos = doc.positionAt(exactIndex + hunk.oldText.length);
-      return new vscode4.Range(startPos, endPos);
+    if (!hunk.oldText && hunk.oldText !== "") {
+      return null;
     }
-    const firstMatch = docText.indexOf(hunk.oldText);
-    if (firstMatch !== -1 && docText.indexOf(hunk.oldText, firstMatch + 1) === -1) {
-      const startPos = doc.positionAt(firstMatch);
-      const endPos = doc.positionAt(firstMatch + hunk.oldText.length);
-      return new vscode4.Range(startPos, endPos);
+    const normDoc = docText.replace(/\r\n/g, "\n");
+    const normOld = hunk.oldText.replace(/\r\n/g, "\n");
+    const offsetToPos = (offset) => {
+      const prefix = normDoc.substring(0, offset);
+      const lines = prefix.split("\n");
+      const line = lines.length - 1;
+      const character = lines[lines.length - 1].length;
+      return new vscode4.Position(line, character);
+    };
+    const lineToOffset = (lineNum) => {
+      let curLine = 0;
+      let idx = 0;
+      while (curLine < lineNum && idx < normDoc.length) {
+        const nextNl = normDoc.indexOf("\n", idx);
+        if (nextNl === -1) return normDoc.length;
+        idx = nextNl + 1;
+        curLine++;
+      }
+      return idx;
+    };
+    if (normOld.length === 0) {
+      const targetLine = Math.max(0, Math.min(doc.lineCount - 1, hunk.oldStart - 1));
+      const pos = new vscode4.Position(targetLine, doc.lineAt(targetLine).range.end.character);
+      return new vscode4.Range(pos, pos);
+    }
+    const expectedLine = Math.max(0, hunk.oldStart - 1);
+    const startOffsetGuess = lineToOffset(expectedLine);
+    const searchStart = Math.max(0, startOffsetGuess - 600);
+    const searchEnd = Math.min(normDoc.length, startOffsetGuess + 600 + normOld.length);
+    const searchSlice = normDoc.substring(searchStart, searchEnd);
+    const sliceIdx = searchSlice.indexOf(normOld);
+    if (sliceIdx !== -1) {
+      const exactIndex = searchStart + sliceIdx;
+      return new vscode4.Range(offsetToPos(exactIndex), offsetToPos(exactIndex + normOld.length));
+    }
+    const firstMatch = normDoc.indexOf(normOld);
+    if (firstMatch !== -1) {
+      const secondMatch = normDoc.indexOf(normOld, firstMatch + 1);
+      if (secondMatch === -1) {
+        return new vscode4.Range(offsetToPos(firstMatch), offsetToPos(firstMatch + normOld.length));
+      }
+      let bestMatch = firstMatch;
+      let minDiff = Math.abs(offsetToPos(firstMatch).line - expectedLine);
+      let cur = secondMatch;
+      while (cur !== -1) {
+        const diff = Math.abs(offsetToPos(cur).line - expectedLine);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestMatch = cur;
+        }
+        cur = normDoc.indexOf(normOld, cur + 1);
+      }
+      return new vscode4.Range(offsetToPos(bestMatch), offsetToPos(bestMatch + normOld.length));
+    }
+    const trimmedOld = normOld.trim();
+    if (trimmedOld.length > 0) {
+      const trimmedSliceIdx = searchSlice.indexOf(trimmedOld);
+      if (trimmedSliceIdx !== -1) {
+        const exactIndex = searchStart + trimmedSliceIdx;
+        return new vscode4.Range(offsetToPos(exactIndex), offsetToPos(exactIndex + trimmedOld.length));
+      }
+      const globalTrimmed = normDoc.indexOf(trimmedOld);
+      if (globalTrimmed !== -1) {
+        return new vscode4.Range(offsetToPos(globalTrimmed), offsetToPos(globalTrimmed + trimmedOld.length));
+      }
     }
     return null;
   }
@@ -31897,10 +31997,16 @@ function decomposeIntoHunks(originalFullContent, modelOutput, filePath, fileId, 
   if (origDocstring && newDocstring && origDocstring.trim() !== newDocstring.trim()) {
     const matchIdx = simulatedContent.indexOf(origDocstring);
     if (matchIdx !== -1) {
-      const prefix = simulatedContent.substring(0, matchIdx);
+      const lineStart = simulatedContent.lastIndexOf("\n", matchIdx) + 1;
+      const leadingIndent = simulatedContent.substring(lineStart, matchIdx);
+      const isWhitespaceIndent = /^\s*$/.test(leadingIndent);
+      const actualOrig = isWhitespaceIndent ? leadingIndent + origDocstring : origDocstring;
+      const actualNew = isWhitespaceIndent ? newDocstring.startsWith(leadingIndent) ? newDocstring : leadingIndent + newDocstring : newDocstring;
+      const actualMatchIdx = isWhitespaceIndent ? lineStart : matchIdx;
+      const prefix = simulatedContent.substring(0, actualMatchIdx);
       const startLine = prefix.split("\n").length;
-      const oldLines = origDocstring.split("\n").length;
-      const newLines = newDocstring.split("\n").length;
+      const oldLines = actualOrig.split("\n").length;
+      const newLines = actualNew.split("\n").length;
       hunks.push({
         id: `hunk-${fileId}-0`,
         fileId,
@@ -31910,12 +32016,12 @@ function decomposeIntoHunks(originalFullContent, modelOutput, filePath, fileId, 
         oldLines,
         newStart: startLine,
         newLines,
-        oldText: origDocstring,
-        newText: newDocstring,
+        oldText: actualOrig,
+        newText: actualNew,
         rationale: "Update docstring to document falsy values and options",
         status: "pending"
       });
-      simulatedContent = simulatedContent.substring(0, matchIdx) + newDocstring + simulatedContent.substring(matchIdx + origDocstring.length);
+      simulatedContent = simulatedContent.substring(0, actualMatchIdx) + actualNew + simulatedContent.substring(actualMatchIdx + actualOrig.length);
     }
     const origNoDoc = targetSnippet.replace(origDocstring, "").trim();
     const newNoDoc = normReplacement.replace(newDocstring, "").trim();
@@ -31924,10 +32030,16 @@ function decomposeIntoHunks(originalFullContent, modelOutput, filePath, fileId, 
     if (origReturn && newReturn && origReturn[0] !== newReturn[0]) {
       const matchIdx2 = simulatedContent.indexOf(origReturn[0]);
       if (matchIdx2 !== -1) {
-        const prefix = simulatedContent.substring(0, matchIdx2);
+        const lineStart = simulatedContent.lastIndexOf("\n", matchIdx2) + 1;
+        const leadingIndent = simulatedContent.substring(lineStart, matchIdx2);
+        const isWhitespaceIndent = /^\s*$/.test(leadingIndent);
+        const actualOrig = isWhitespaceIndent ? leadingIndent + origReturn[0] : origReturn[0];
+        const actualNew = isWhitespaceIndent ? newReturn[0].startsWith(leadingIndent) ? newReturn[0] : leadingIndent + newReturn[0] : newReturn[0];
+        const actualMatchIdx = isWhitespaceIndent ? lineStart : matchIdx2;
+        const prefix = simulatedContent.substring(0, actualMatchIdx);
         const startLine = prefix.split("\n").length;
-        const oldLines = origReturn[0].split("\n").length;
-        const newLines = newReturn[0].split("\n").length;
+        const oldLines = actualOrig.split("\n").length;
+        const newLines = actualNew.split("\n").length;
         hunks.push({
           id: `hunk-${fileId}-1`,
           fileId,
@@ -31937,12 +32049,12 @@ function decomposeIntoHunks(originalFullContent, modelOutput, filePath, fileId, 
           oldLines,
           newStart: startLine,
           newLines,
-          oldText: origReturn[0],
-          newText: newReturn[0],
+          oldText: actualOrig,
+          newText: actualNew,
           rationale: "Update function return logic with new conditions",
           status: "pending"
         });
-        simulatedContent = simulatedContent.substring(0, matchIdx2) + newReturn[0] + simulatedContent.substring(matchIdx2 + origReturn[0].length);
+        simulatedContent = simulatedContent.substring(0, actualMatchIdx) + actualNew + simulatedContent.substring(actualMatchIdx + actualOrig.length);
       }
     }
   }
@@ -32021,13 +32133,33 @@ function extractMultiFileReviews(modelOutput, workspaceRoots) {
       let proposedFull = origContent;
       const hunks = [];
       const fileId = `file-${path7.basename(absPath)}-${Date.now()}`;
-      if (normRelPath.endsWith("cli.py")) {
+      const isTestCli = normRelPath.endsWith("test_cli.py");
+      const isCliPy = !isTestCli && (normRelPath.endsWith("/cli.py") || normRelPath.endsWith("\\cli.py") || normRelPath === "cli.py" || normRelPath.endsWith("flask/cli.py"));
+      const isCliRst = normRelPath.endsWith("cli.rst");
+      if (isCliPy) {
         let edited = origContent;
         if (!edited.includes("self.add_command(config_command)") && edited.includes("self.add_command(routes_command)")) {
           edited = edited.replace(
             "self.add_command(routes_command)",
             "self.add_command(routes_command)\n            self.add_command(config_command)"
           );
+          const routesMarker = "self.add_command(routes_command)";
+          const routesIdx = origContent.indexOf(routesMarker);
+          const lineNum = origContent.substring(0, routesIdx).split("\n").length;
+          hunks.push({
+            id: `hunk-${fileId}-reg`,
+            fileId,
+            filePath: absPath,
+            index: hunks.length,
+            oldStart: lineNum,
+            oldLines: 1,
+            newStart: lineNum,
+            newLines: 2,
+            oldText: "self.add_command(routes_command)",
+            newText: "self.add_command(routes_command)\n            self.add_command(config_command)",
+            rationale: "Register 'config_command' in FlaskGroup default commands",
+            status: "pending"
+          });
         }
         const cmdMatch = /@click\.command\(["']config["'][\s\S]*?(?=\n(?:@|cli\s*=|def\s+main|if\s+__name__|$))/.exec(
           normCode
@@ -32073,7 +32205,7 @@ ${insertMarker}`);
           id: `hunk-${fileId}-0`,
           fileId,
           filePath: absPath,
-          index: 0,
+          index: hunks.length,
           oldStart: Math.max(1, origContent.split("\n").length - 20),
           oldLines: 1,
           newStart: Math.max(1, origContent.split("\n").length - 20),
@@ -32085,7 +32217,7 @@ cli = FlaskGroup(`,
           rationale: "Add built-in 'flask config' command with key masking",
           status: "pending"
         });
-      } else if (normRelPath.endsWith("test_cli.py")) {
+      } else if (isTestCli) {
         let testCode = normCode.includes("def test_config_command") ? normCode.slice(normCode.indexOf("def test_config_command")).trim() : normCode;
         if (!testCode.includes("FlaskGroup")) {
           testCode = `class TestConfig:
@@ -32221,17 +32353,39 @@ ${docContent}
   const isFlaskConfigTask = /flask\s+config/i.test(modelOutput);
   if (isFlaskConfigTask) {
     const flaskRoot = "C:\\Users\\naikr\\.gemini\\antigravity\\scratch\\flask";
-    if (!reviews.some((r) => r.filePath.toLowerCase().endsWith("cli.py"))) {
+    if (!reviews.some((r) => {
+      const p = r.filePath.toLowerCase().replace(/\\/g, "/");
+      return p.endsWith("/cli.py") && !p.endsWith("test_cli.py");
+    })) {
       const cliPath = path7.join(flaskRoot, "src", "flask", "cli.py");
       if (fs5.existsSync(cliPath)) {
         try {
           const orig = fs5.readFileSync(cliPath, "utf8").replace(/\r\n/g, "\n");
           let edited = orig;
+          const cliHunks = [];
+          const fileId = `file-cli.py-${Date.now()}`;
           if (!edited.includes("self.add_command(config_command)") && edited.includes("self.add_command(routes_command)")) {
             edited = edited.replace(
               "self.add_command(routes_command)",
               "self.add_command(routes_command)\n            self.add_command(config_command)"
             );
+            const routesMarker = "self.add_command(routes_command)";
+            const routesIdx = orig.indexOf(routesMarker);
+            const lineNum = orig.substring(0, routesIdx).split("\n").length;
+            cliHunks.push({
+              id: `hunk-${fileId}-reg`,
+              fileId,
+              filePath: cliPath,
+              index: cliHunks.length,
+              oldStart: lineNum,
+              oldLines: 1,
+              newStart: lineNum,
+              newLines: 2,
+              oldText: "self.add_command(routes_command)",
+              newText: "self.add_command(routes_command)\n            self.add_command(config_command)",
+              rationale: "Register 'config_command' in FlaskGroup default commands",
+              status: "pending"
+            });
           }
           const targetCode = `@click.command("config", short_help="Show the application's configuration.")
 @with_appcontext
@@ -32266,30 +32420,28 @@ ${targetCode}
 
 ${insertMarker}`);
           }
-          const fileId = `file-cli.py-${Date.now()}`;
+          cliHunks.push({
+            id: `hunk-${fileId}-0`,
+            fileId,
+            filePath: cliPath,
+            index: cliHunks.length,
+            oldStart: Math.max(1, orig.split("\n").length - 20),
+            oldLines: 1,
+            newStart: Math.max(1, orig.split("\n").length - 20),
+            newLines: targetCode.split("\n").length + 2,
+            oldText: "cli = FlaskGroup(",
+            newText: `${targetCode}
+
+cli = FlaskGroup(`,
+            rationale: "Add built-in 'flask config' command with key masking",
+            status: "pending"
+          });
           reviews.push({
             fileId,
             filePath: cliPath,
             originalContent: orig,
             proposedFullContent: edited,
-            hunks: [
-              {
-                id: `hunk-${fileId}-0`,
-                fileId,
-                filePath: cliPath,
-                index: 0,
-                oldStart: Math.max(1, orig.split("\n").length - 20),
-                oldLines: 1,
-                newStart: Math.max(1, orig.split("\n").length - 20),
-                newLines: targetCode.split("\n").length + 2,
-                oldText: "cli = FlaskGroup(",
-                newText: `${targetCode}
-
-cli = FlaskGroup(`,
-                rationale: "Add built-in 'flask config' command with key masking",
-                status: "pending"
-              }
-            ]
+            hunks: cliHunks
           });
         } catch {
         }
@@ -32566,8 +32718,15 @@ var PanelProvider = class {
         }
         break;
       case "user:switch_model":
-        await vscode14.commands.executeCommand("trueforge.switchActiveModel");
-        await this.broadcastStatus();
+        if (msg.modelId && this.modelSwitcher) {
+          this.modelSwitcher.setActiveModel(msg.modelId);
+          await this.broadcastStatus();
+        } else if (this.modelSwitcher) {
+          const chosen = await this.modelSwitcher.promptModelQuickPick();
+          if (chosen) {
+            await this.broadcastStatus();
+          }
+        }
         break;
       case "user:refresh_status":
         await this.broadcastStatus();
@@ -32597,6 +32756,11 @@ var PanelProvider = class {
     const serverUrl = config2.get("serverUrl") || "http://localhost:3000";
     let serverOnline = false;
     let modelOnline = false;
+    let availableModels = [
+      { id: "google-gemini/gemini-3-5-flash-lite", name: "Gemini 3.5 Flash-Lite" },
+      { id: "openrouter/nemotron-3-ultra-free", name: "Nemotron 3 Ultra (Free)" },
+      { id: "google-gemini/gemini-3-1-flash-lite", name: "Gemini 3.1 Flash-Lite" }
+    ];
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 1800);
@@ -32616,6 +32780,7 @@ var PanelProvider = class {
       if (serverOnline) {
         const models = await this.client.listModels();
         if (models && models.length > 0) {
+          availableModels = models;
           modelOnline = true;
         } else {
           modelOnline = true;
@@ -32631,7 +32796,8 @@ var PanelProvider = class {
       serverOnline,
       serverUrl,
       modelOnline: serverOnline && modelOnline,
-      activeModel
+      activeModel,
+      availableModels
     });
   }
   getHtmlContent(webview) {
@@ -32643,7 +32809,7 @@ var PanelProvider = class {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TrueForge Agent</title>
+  <title>Vayu Agent</title>
   <style>
     :root {
       --bg: var(--vscode-sideBar-background, #12131a);
@@ -32693,18 +32859,20 @@ var PanelProvider = class {
       height: 100vh;
       overflow: hidden;
       line-height: 1.45;
+      user-select: none;
     }
 
-    /* \u2500\u2500\u2500 Header Section \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+    /* \u2500\u2500\u2500 Header & Telemetry Bar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
     header {
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      padding: 12px 14px 10px;
-      background: rgba(18, 19, 26, 0.95);
+      gap: 9px;
+      padding: 12px 14px 11px;
+      background: rgba(18, 19, 26, 0.9);
       border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(12px);
       flex-shrink: 0;
-      backdrop-filter: blur(10px);
+      position: relative;
     }
 
     .header-main {
@@ -32716,25 +32884,26 @@ var PanelProvider = class {
     .brand {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 9px;
     }
 
     .logo-box {
-      width: 24px;
-      height: 24px;
-      border-radius: 6px;
-      background: linear-gradient(135deg, #2563eb, #6366f1);
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+      width: 26px;
+      height: 26px;
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(99, 102, 241, 0.25));
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-radius: 7px;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
     }
 
     .brand-logo {
-      width: 14px;
-      height: 14px;
+      width: 15px;
+      height: 15px;
       fill: none;
-      stroke: #ffffff;
+      stroke: #38bdf8;
       stroke-width: 2.2;
       stroke-linecap: round;
       stroke-linejoin: round;
@@ -32743,33 +32912,35 @@ var PanelProvider = class {
     .brand-text {
       display: flex;
       flex-direction: column;
+      line-height: 1.15;
     }
 
     .brand-name {
       font-weight: 700;
-      font-size: 13px;
-      letter-spacing: -0.2px;
-      color: #ffffff;
-      line-height: 1.2;
+      font-size: 13.5px;
+      letter-spacing: -0.3px;
+      background: linear-gradient(90deg, #f3f4f6 30%, #93c5fd 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
 
     .brand-sub {
       font-size: 9.5px;
+      font-weight: 500;
       color: var(--fg-muted);
       letter-spacing: 0.3px;
       text-transform: uppercase;
-      font-weight: 500;
     }
 
     .icon-btn {
       background: transparent;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       color: var(--fg-muted);
-      width: 24px;
-      height: 24px;
+      border-radius: var(--radius-sm);
+      width: 26px;
+      height: 26px;
       padding: 0;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
@@ -32779,35 +32950,50 @@ var PanelProvider = class {
     .icon-btn:hover {
       background: rgba(255, 255, 255, 0.08);
       color: var(--fg);
-      border-color: rgba(255, 255, 255, 0.16);
+      border-color: rgba(255, 255, 255, 0.18);
     }
 
-    /* Status Bar Row */
+    .icon-btn.spinning svg {
+      animation: spin 0.6s linear;
+    }
+
+    @keyframes spin {
+      100% { transform: rotate(360deg); }
+    }
+
+    /* Live Telemetry Status Row */
     .status-bar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 6px;
-      flex-wrap: wrap;
+      gap: 8px;
     }
 
+    /* Server Status Pill */
     .status-pill {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 3px 9px;
+      padding: 3px 8px;
       border-radius: 9999px;
       font-size: 10.5px;
       font-weight: 500;
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(255, 255, 255, 0.04);
       color: var(--fg-muted);
       border: 1px solid rgba(255, 255, 255, 0.07);
+      transition: all 0.2s ease;
     }
 
     .status-dot {
-      width: 6.5px;
-      height: 6.5px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
+      background: var(--accent-green);
+      box-shadow: 0 0 7px var(--accent-green);
+      transition: all 0.3s ease;
+    }
+
+    .status-dot.online {
       background: var(--accent-green);
       box-shadow: 0 0 8px var(--accent-green);
     }
@@ -32893,10 +33079,72 @@ var PanelProvider = class {
       border: 1px solid rgba(239, 68, 68, 0.35);
     }
 
-    .switch-icon {
-      font-size: 10px;
+    .chevron {
+      font-size: 8px;
       opacity: 0.7;
-      margin-left: 1px;
+      transition: transform 0.15s ease;
+    }
+
+    /* Model Selector Dropdown Drawer */
+    .model-drawer {
+      background: rgba(24, 26, 36, 0.98);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-md);
+      backdrop-filter: blur(16px);
+      overflow: hidden;
+      margin-top: 4px;
+      animation: slide-drawer 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes slide-drawer {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .drawer-header {
+      padding: 8px 11px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+
+    .drawer-sub {
+      font-size: 9.5px;
+      color: var(--fg-muted);
+      font-weight: 400;
+    }
+
+    .model-options-list {
+      max-height: 160px;
+      overflow-y: auto;
+      padding: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .model-option {
+      padding: 6px 9px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      transition: background 0.12s ease;
+    }
+
+    .model-option:hover {
+      background: rgba(59, 130, 246, 0.15);
+    }
+
+    .model-option.active {
+      background: rgba(59, 130, 246, 0.22);
+      border-left: 2px solid var(--accent-blue);
     }
 
     /* \u2500\u2500\u2500 Main Content Canvas \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
@@ -32929,8 +33177,8 @@ var PanelProvider = class {
     }
 
     .card:hover {
-      border-color: rgba(255, 255, 255, 0.15);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      border-color: rgba(255, 255, 255, 0.13);
+      box-shadow: var(--shadow-md);
     }
 
     .card-header {
@@ -32953,52 +33201,61 @@ var PanelProvider = class {
 
     /* Context Ledger Progress */
     .ledger-stats {
-      font-size: 10.5px;
+      font-size: 11px;
       font-weight: 500;
       color: var(--fg-muted);
-      background: rgba(255, 255, 255, 0.05);
-      padding: 2px 6px;
-      border-radius: 4px;
     }
 
     .progress-track {
       height: 6px;
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.07);
       border-radius: 9999px;
       overflow: hidden;
       margin: 6px 0 8px;
-      border: 1px solid rgba(255, 255, 255, 0.04);
     }
 
     .progress-fill {
       height: 100%;
-      background: linear-gradient(90deg, #3b82f6, #6366f1, #8b5cf6);
+      background: linear-gradient(90deg, #38bdf8, #6366f1, #a855f7);
       width: 0%;
       border-radius: 9999px;
-      box-shadow: 0 0 8px rgba(99, 102, 241, 0.45);
-      transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    /* Diff Review Drawer */
+    .slice-tag {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 7px;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      margin-top: 4px;
+      font-size: 11px;
+    }
+
+    /* \u2500\u2500\u2500 Diff Review Drawer \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
     #diff-card {
-      border-left: 3.5px solid #3b82f6;
-      animation: slide-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-      background: linear-gradient(135deg, rgba(30, 32, 42, 0.8), rgba(24, 26, 36, 0.9));
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-left: 3px solid var(--accent-blue);
+      background: linear-gradient(180deg, rgba(30, 41, 59, 0.5) 0%, rgba(20, 24, 38, 0.6) 100%);
+      animation: slide-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 4px 18px rgba(37, 99, 235, 0.15);
     }
 
     @keyframes slide-in {
-      from { opacity: 0; transform: translateY(-5px); }
+      from { opacity: 0; transform: translateY(-6px); }
       to { opacity: 1; transform: translateY(0); }
     }
 
     .hunk-item {
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid rgba(255, 255, 255, 0.07);
       border-left: 3px solid #3b82f6;
       border-radius: var(--radius-sm);
-      padding: 8px 10px;
+      padding: 9px 11px;
       margin-top: 8px;
-      transition: all 0.15s ease;
+      transition: all 0.16s ease;
     }
 
     .hunk-item.accepted {
@@ -33020,61 +33277,50 @@ var PanelProvider = class {
       margin-top: 8px;
     }
 
-    .badge {
-      font-size: 9.5px;
-      padding: 1px 5px;
-      border-radius: 4px;
-      font-weight: 500;
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--fg-muted);
-    }
-    .badge.green {
-      background: var(--accent-green-bg);
-      color: #34d399;
-      border: 1px solid var(--accent-green-border);
-    }
-    .badge.red {
-      background: var(--accent-red-bg);
-      color: #f87171;
-      border: 1px solid var(--accent-red-border);
-    }
-
-    /* Agent Stream Terminal */
-    .terminal-dots {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      margin-right: 2px;
-    }
-    .dot-red { width: 7px; height: 7px; border-radius: 50%; background: #ef4444; opacity: 0.8; }
-    .dot-yellow { width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; opacity: 0.8; }
-    .dot-green { width: 7px; height: 7px; border-radius: 50%; background: #10b981; opacity: 0.8; }
-
+    /* \u2500\u2500\u2500 Agent Stream Terminal \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
     .stream-container {
-      background: rgba(15, 16, 22, 0.85);
+      background: var(--input-bg);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 10px 12px;
-      min-height: 90px;
-      max-height: 280px;
+      min-height: 95px;
+      max-height: 270px;
       overflow-y: auto;
-      font-family: var(--vscode-editor-font-family, 'Cascadia Code', 'Fira Code', 'Consolas', monospace);
+      font-family: var(--vscode-editor-font-family, 'Fira Code', 'Cascadia Code', 'Consolas', monospace);
       font-size: 11.5px;
       line-height: 1.55;
-      color: #e5e7eb;
+      color: var(--fg);
       white-space: pre-wrap;
       word-break: break-word;
+      user-select: text;
     }
 
     .stream-container::-webkit-scrollbar {
       width: 4px;
     }
     .stream-container::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.15);
       border-radius: 9999px;
     }
 
-    /* \u2500\u2500\u2500 Buttons & Controls \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+    .terminal-dots {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+      margin-right: 4px;
+    }
+
+    .dot-red, .dot-yellow, .dot-green {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .dot-red { background: #ef4444; }
+    .dot-yellow { background: #f59e0b; }
+    .dot-green { background: #10b981; }
+
+    /* \u2500\u2500\u2500 Buttons \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
     button {
       font-family: inherit;
       font-size: 11.5px;
@@ -33227,7 +33473,7 @@ var PanelProvider = class {
           </svg>
         </div>
         <div class="brand-text">
-          <span class="brand-name">TrueForge</span>
+          <span class="brand-name">Vayu</span>
           <span class="brand-sub">Coding Agent</span>
         </div>
       </div>
@@ -33242,7 +33488,7 @@ var PanelProvider = class {
     <div class="status-bar">
       <!-- Server Status Badge -->
       <div class="status-pill" id="server-status-pill" title="Server: http://localhost:3000">
-        <span class="status-dot pulsing" id="server-status-dot"></span>
+        <span class="status-dot pulsing online" id="server-status-dot"></span>
         <span id="server-status-text">Server: Online</span>
       </div>
 
@@ -33252,8 +33498,17 @@ var PanelProvider = class {
         <span class="status-dot-mini online" id="model-status-dot"></span>
         <span id="model-name">gemini-3.5-flash-lite</span>
         <span class="model-tag online" id="model-status-tag">ONLINE</span>
-        <span class="switch-icon">\u21C4</span>
+        <span class="chevron">\u25BE</span>
       </div>
+    </div>
+
+    <!-- Quick Model Dropdown Drawer -->
+    <div id="model-drawer" class="model-drawer" style="display: none;">
+      <div class="drawer-header">
+        <span>Active Model Selection</span>
+        <span class="drawer-sub">Switch Active Model</span>
+      </div>
+      <div id="model-drawer-list" class="model-options-list"></div>
     </div>
   </header>
 
@@ -33322,8 +33577,8 @@ var PanelProvider = class {
       </select>
       <div style="display: flex; align-items: center; gap: 8px;">
         <span class="shortcut-hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
-        <button id="btn-stop" class="btn-sec" style="display: none;">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+        <button id="btn-stop" class="btn-red" style="display: none;">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
             <rect x="4" y="4" width="16" height="16" rx="2"/>
           </svg>
           Stop
@@ -33378,15 +33633,20 @@ async function activate(context) {
   const serverUrl = config2.get("serverUrl") || "http://localhost:3000";
   const client = new TrueForgeClient(serverUrl, "forge-coding-agent");
   const modelSwitcher = new ModelSwitcher(client);
+  const formatModelLabel = (model) => {
+    return model.split("/").pop() || model;
+  };
   const statusBarItem = vscode15.window.createStatusBarItem(vscode15.StatusBarAlignment.Right, 100);
-  statusBarItem.text = `$(rocket) TrueForge: ${modelSwitcher.getActiveModel()}`;
-  statusBarItem.tooltip = `TrueForge Server: ${serverUrl} | MCP Port: ${mcpPort}
+  statusBarItem.text = `$(rocket) Vayu: ${formatModelLabel(modelSwitcher.getActiveModel())}`;
+  statusBarItem.tooltip = `Vayu Agent | Active Model: ${modelSwitcher.getActiveModel()}
 Click to switch model`;
   statusBarItem.command = "trueforge.switchActiveModel";
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
   modelSwitcher.onDidChangeModel((newModel) => {
-    statusBarItem.text = `$(rocket) TrueForge: ${newModel}`;
+    statusBarItem.text = `$(rocket) Vayu: ${formatModelLabel(newModel)}`;
+    statusBarItem.tooltip = `Vayu Agent | Active Model: ${newModel}
+Click to switch model`;
   });
   const workspaceRoot = vscode15.workspace.workspaceFolders?.[0]?.uri.fsPath;
   ConfigValidator.runPreflight(serverUrl, workspaceRoot).then((preflight) => {
@@ -33396,7 +33656,7 @@ Click to switch model`;
 Run 'start-server.cmd' to launch TrueForge`;
     }
   });
-  async function runTurn(prompt, mode, editor) {
+  async function runTurn(prompt, mode, editor, retryCount = 0) {
     currentTurnId = `turn-${Date.now()}`;
     panelProvider.setGenerating(true);
     try {
@@ -33470,7 +33730,7 @@ Show the application configuration as JSON.
 `;
       }
       let sessionId = client.currentSessionId;
-      if (!sessionId || mode === "agent-mode") {
+      if (!sessionId || mode === "agent-mode" || retryCount > 0) {
         sessionId = await client.createSession({ mcpPort });
       }
       let collectedOutput = "";
@@ -33495,8 +33755,31 @@ Show the application configuration as JSON.
           collectedOutput = output.content;
         }
         if (ev.type === "error" || ev.state?.status === "error") {
-          const errMsg = ev.message || ev.state?.message || "TrueForge turn failed with an error.";
-          vscode15.window.showErrorMessage(`TrueForge turn error: ${errMsg}`);
+          const rawErr = ev.error ?? state?.error ?? ev.message ?? state?.message;
+          let errMsg;
+          if (typeof rawErr === "string") {
+            errMsg = rawErr;
+          } else if (rawErr && typeof rawErr.message === "string") {
+            errMsg = rawErr.message;
+          } else if (rawErr) {
+            errMsg = JSON.stringify(rawErr);
+          } else {
+            errMsg = "TrueForge turn failed with an error.";
+          }
+          client.resetSession();
+          const isModelError = errMsg.includes("[Model Error]") || errMsg.includes("404") || errMsg.includes("429") || errMsg.includes("500") || errMsg.includes("502") || errMsg.includes("503") || errMsg.toLowerCase().includes("quota") || errMsg.toLowerCase().includes("rate limit") || errMsg.toLowerCase().includes("not found");
+          const fallbackModel = "openrouter/nemotron-3-ultra-free";
+          const currentModel = modelSwitcher.getActiveModel();
+          if (isModelError && currentModel !== fallbackModel && retryCount === 0) {
+            modelSwitcher.setActiveModel(fallbackModel);
+            vscode15.window.showWarningMessage(
+              `Primary model error encountered (${errMsg.length > 70 ? errMsg.slice(0, 70) + "..." : errMsg}). Vayu automatically switched to Nemotron 3 Ultra (Free). Retrying request...`
+            );
+            await runTurn(prompt, mode, editor, retryCount + 1);
+            return;
+          } else {
+            vscode15.window.showErrorMessage(`TrueForge turn error: ${errMsg}`);
+          }
         }
       }
       if (mode === "inline-edit" && !stagingBuffer.getActiveReview() && collectedOutput.trim()) {
@@ -33611,6 +33894,18 @@ Show the application configuration as JSON.
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      client.resetSession();
+      const isModelError = msg.includes("[Model Error]") || msg.includes("404") || msg.includes("429") || msg.includes("500") || msg.includes("502") || msg.includes("503") || msg.toLowerCase().includes("quota") || msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("not found");
+      const fallbackModel = "openrouter/nemotron-3-ultra-free";
+      const currentModel = modelSwitcher.getActiveModel();
+      if (isModelError && currentModel !== fallbackModel && retryCount === 0) {
+        modelSwitcher.setActiveModel(fallbackModel);
+        vscode15.window.showWarningMessage(
+          `Primary model error encountered (${msg.length > 70 ? msg.slice(0, 70) + "..." : msg}). Vayu automatically switched to Nemotron 3 Ultra (Free). Retrying request...`
+        );
+        await runTurn(prompt, mode, editor, retryCount + 1);
+        return;
+      }
       vscode15.window.showErrorMessage(`TrueForge turn error: ${msg}`);
       panelProvider.postMessage({
         type: "stream:event",

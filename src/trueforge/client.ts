@@ -53,7 +53,10 @@ export class TrueForgeClient {
     this.serverUrl = serverUrl.replace(/\/+$/, '');
     this.agentId = agentId;
     this.streamHandler = new StreamHandler();
-    this.resilience = new ResilienceSupervisor();
+    this.resilience = new ResilienceSupervisor({
+      primaryModel: 'google-gemini/gemini-3-5-flash-lite',
+      fallbackModel: 'openrouter/nemotron-3-ultra-free',
+    });
   }
 
   /**
@@ -80,6 +83,15 @@ export class TrueForgeClient {
     return Array.from(new Set(list));
   }
 
+  setActiveModel(modelId: string): void {
+    this.resilience.setCurrentModel(modelId);
+    this.activeSessionId = null;
+  }
+
+  getActiveModel(): string {
+    return this.resilience.getCurrentModel();
+  }
+
   // ---------------------------------------------------------------------------
   // Session lifecycle
   // ---------------------------------------------------------------------------
@@ -91,8 +103,20 @@ export class TrueForgeClient {
       urls.push(`${base}/api/v1/sessions`);
     }
 
+    const activeModel = this.resilience.getCurrentModel();
     const body = JSON.stringify({
-      agent: { name: this.agentId },
+      agent: {
+        spec: {
+          model: { name: activeModel || 'google-gemini/gemini-3-5-flash-lite' },
+          instructions:
+            'You are an editor-native coding assistant. When modifying code across files, provide the exact replacement code blocks for each file clearly labeled. Do not spawn sub-agents.',
+          config: {
+            dynamic_sub_agents: { enabled: false },
+            ask_user_questions: { enabled: false },
+            web_search: { enabled: false },
+          },
+        },
+      },
       metadata: options?.mcpPort ? { mcpPort: String(options.mcpPort) } : {},
     });
 
@@ -322,6 +346,7 @@ export class TrueForgeClient {
       }
       return [
         { id: 'google-gemini/gemini-3-5-flash-lite', name: 'Gemini 3.5 Flash-Lite' },
+        { id: 'openrouter/nemotron-3-ultra-free', name: 'Nemotron 3 Ultra (Free)' },
         { id: 'google-gemini/gemini-3-1-flash-lite', name: 'Gemini 3.1 Flash-Lite' },
       ];
     });
@@ -329,6 +354,10 @@ export class TrueForgeClient {
 
   get currentSessionId(): string | null {
     return this.activeSessionId;
+  }
+
+  resetSession(): void {
+    this.activeSessionId = null;
   }
 }
 

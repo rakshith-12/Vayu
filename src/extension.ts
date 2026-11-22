@@ -65,15 +65,20 @@ export async function activate(context: vscode.ExtensionContext) {
   const modelSwitcher = new ModelSwitcher(client);
 
   // Status Bar Item
+  const formatModelLabel = (model: string): string => {
+    return model.split('/').pop() || model;
+  };
+
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  statusBarItem.text = `$(rocket) TrueForge: ${modelSwitcher.getActiveModel()}`;
-  statusBarItem.tooltip = `TrueForge Server: ${serverUrl} | MCP Port: ${mcpPort}\nClick to switch model`;
+  statusBarItem.text = `$(rocket) Vayu: ${formatModelLabel(modelSwitcher.getActiveModel())}`;
+  statusBarItem.tooltip = `Vayu Agent | Active Model: ${modelSwitcher.getActiveModel()}\nClick to switch model`;
   statusBarItem.command = 'trueforge.switchActiveModel';
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
   modelSwitcher.onDidChangeModel((newModel) => {
-    statusBarItem.text = `$(rocket) TrueForge: ${newModel}`;
+    statusBarItem.text = `$(rocket) Vayu: ${formatModelLabel(newModel)}`;
+    statusBarItem.tooltip = `Vayu Agent | Active Model: ${newModel}\nClick to switch model`;
   });
 
   // Pre-flight health check
@@ -86,7 +91,12 @@ export async function activate(context: vscode.ExtensionContext) {
   });
 
   // 4. Turn execution coordinator
-  async function runTurn(prompt: string, mode: ExecutionMode, editor?: vscode.TextEditor): Promise<void> {
+  async function runTurn(
+    prompt: string,
+    mode: ExecutionMode,
+    editor?: vscode.TextEditor,
+    retryCount = 0,
+  ): Promise<void> {
     currentTurnId = `turn-${Date.now()}`;
     panelProvider.setGenerating(true);
 
@@ -167,7 +177,7 @@ Show the application configuration as JSON.
 
       // Ensure session exists
       let sessionId = client.currentSessionId;
-      if (!sessionId || mode === 'agent-mode') {
+      if (!sessionId || mode === 'agent-mode' || retryCount > 0) {
         sessionId = await client.createSession({ mcpPort });
       }
 
@@ -198,11 +208,44 @@ Show the application configuration as JSON.
         }
 
         if (ev.type === 'error' || (ev.state as Record<string, unknown> | undefined)?.status === 'error') {
-          const errMsg =
-            (ev.message as string | undefined) ||
-            ((ev.state as Record<string, unknown> | undefined)?.message as string | undefined) ||
-            'TrueForge turn failed with an error.';
-          vscode.window.showErrorMessage(`TrueForge turn error: ${errMsg}`);
+          const rawErr = ev.error ?? state?.error ?? ev.message ?? state?.message;
+          let errMsg: string;
+          if (typeof rawErr === 'string') {
+            errMsg = rawErr;
+          } else if (rawErr && typeof (rawErr as { message?: string }).message === 'string') {
+            errMsg = (rawErr as { message: string }).message;
+          } else if (rawErr) {
+            errMsg = JSON.stringify(rawErr);
+          } else {
+            errMsg = 'TrueForge turn failed with an error.';
+          }
+
+          client.resetSession();
+
+          const isModelError =
+            errMsg.includes('[Model Error]') ||
+            errMsg.includes('404') ||
+            errMsg.includes('429') ||
+            errMsg.includes('500') ||
+            errMsg.includes('502') ||
+            errMsg.includes('503') ||
+            errMsg.toLowerCase().includes('quota') ||
+            errMsg.toLowerCase().includes('rate limit') ||
+            errMsg.toLowerCase().includes('not found');
+
+          const fallbackModel = 'openrouter/nemotron-3-ultra-free';
+          const currentModel = modelSwitcher.getActiveModel();
+
+          if (isModelError && currentModel !== fallbackModel && retryCount === 0) {
+            modelSwitcher.setActiveModel(fallbackModel);
+            vscode.window.showWarningMessage(
+              `Primary model error encountered (${errMsg.length > 70 ? errMsg.slice(0, 70) + '...' : errMsg}). Vayu automatically switched to Nemotron 3 Ultra (Free). Retrying request...`,
+            );
+            await runTurn(prompt, mode, editor, retryCount + 1);
+            return;
+          } else {
+            vscode.window.showErrorMessage(`TrueForge turn error: ${errMsg}`);
+          }
         }
       }
 
@@ -340,6 +383,31 @@ Show the application configuration as JSON.
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      client.resetSession();
+
+      const isModelError =
+        msg.includes('[Model Error]') ||
+        msg.includes('404') ||
+        msg.includes('429') ||
+        msg.includes('500') ||
+        msg.includes('502') ||
+        msg.includes('503') ||
+        msg.toLowerCase().includes('quota') ||
+        msg.toLowerCase().includes('rate limit') ||
+        msg.toLowerCase().includes('not found');
+
+      const fallbackModel = 'openrouter/nemotron-3-ultra-free';
+      const currentModel = modelSwitcher.getActiveModel();
+
+      if (isModelError && currentModel !== fallbackModel && retryCount === 0) {
+        modelSwitcher.setActiveModel(fallbackModel);
+        vscode.window.showWarningMessage(
+          `Primary model error encountered (${msg.length > 70 ? msg.slice(0, 70) + '...' : msg}). Vayu automatically switched to Nemotron 3 Ultra (Free). Retrying request...`,
+        );
+        await runTurn(prompt, mode, editor, retryCount + 1);
+        return;
+      }
+
       vscode.window.showErrorMessage(`TrueForge turn error: ${msg}`);
       panelProvider.postMessage({
         type: 'stream:event',

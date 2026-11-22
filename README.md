@@ -1,211 +1,106 @@
 # TrueForge VS Code Coding Agent
 
-An enterprise-grade, editor-native VS Code coding agent powered by a local [TrueForge](https://github.com/truefoundry/trueforge) daemon (`http://localhost:3000`).
+An editor-native VS Code coding agent whose entire agent execution loop, tool orchestration, subagent spawning, context compaction, and model routing run on [@truefoundry/trueforge](https://github.com/truefoundry/trueforge) in local mode (`http://127.0.0.1:3000`).
 
-Provides non-destructive inline editing (`Ctrl+K`), multi-file agent context retrieval (BM25 + AST symbol search), real-time SSE streaming, zero-leak cancellation, and automated model failover.
+## Architecture
 
----
+- **Extension Host**: TypeScript VS Code extension with embedded MCP server (`src/mcp/server.ts`)
+- **TrueForge Integration**: All LLM inference routed through TrueForge local server via SSE streams (`src/trueforge/client.ts`)
+- **Dual-Mode Context Engine**: Mode 1 (Inline Edit fast-path) and Mode 2 (Agent Mode)
+- **Two-Phase Diff Pipeline**: Shadow LSP verification → Line-level highlights & CodeLens review → Bottom-to-top WorkspaceEdit apply → Turn checkpoint undo
+- **Bundled Webview**: Custom reactive UI panel in the activity bar with live Context Ledger token tracking and Diff Review drawer
 
-## 🚀 60-Second Quickstart
-
-No build tools needed! You can install and run this immediately.
+## Quick Start
 
 ### 1. Prerequisites
-- **VS Code** (or Cursor / Windsurf) >= 1.85.0
-- **Node.js** >= 18.0.0
-- A **Google Gemini API Key** (Free from [Google AI Studio](https://aistudio.google.com/app/apikey))
 
----
+- **Node.js**: >= 22.14 (Node.js LTS v26.13.1 is installed on this system)
+- **VS Code**: >= 1.85.0
+- **TrueForge**: Installed globally via `@truefoundry/trueforge`
 
-### 2. Install the Extension in VS Code
-You can install the included pre-built `.vsix` file in one of two ways:
+### 2. Start TrueForge Local Server
 
-#### Option A: Command Line
-```bash
-code --install-extension forge-vscode-agent-1.0.0.vsix
-```
-
-#### Option B: VS Code UI
-1. Open VS Code.
-2. Press `Ctrl+Shift+X` (or `Cmd+Shift+X` on macOS) to open the **Extensions** view.
-3. Click the `...` (Views and More Actions) menu in the top-right corner.
-4. Select **Install from VSIX...**
-5. Choose `forge-vscode-agent-1.0.0.vsix`.
-
----
-
-### 3. Start the TrueForge Server
-
-#### On Windows:
-Double-click or run:
+Run the included launcher:
 ```cmd
 start-server.cmd
 ```
-
-#### On macOS / Linux:
+or via CLI:
 ```bash
-chmod +x start-server.sh
-./start-server.sh
+trueforge --port 3000
 ```
+TrueForge runs in local standalone mode on `http://localhost:3000` with documentation at `http://localhost:3000/api/v1/docs`.
 
-*(Alternatively, run `npx @truefoundry/trueforge --port 3000`)*
+### 3. Install Extension in VS Code
 
----
+You can install the pre-packaged `.vsix` directly:
+1. In VS Code, open the Extensions view (`Ctrl+Shift+X`).
+2. Click `...` (More Actions) > **Install from VSIX...**
+3. Select `forge-vscode-agent-1.0.0.vsix`.
 
-### 4. Configure Your Gemini API Key
-Once TrueForge is running on port 3000, register your Google Gemini API key:
+Alternatively, open this directory in VS Code and press **F5** to start an Extension Development Host.
 
-#### Option A: Web Browser UI
-1. Open [http://localhost:3000](http://localhost:3000) in your browser.
-2. Go to **Settings** &rarr; **Model Providers**.
-3. Select **Google Gemini** and enter your API key.
-
-#### Option B: Terminal Command
-Replace `YOUR_GEMINI_API_KEY` with your key and run:
-
-**Windows PowerShell:**
-```powershell
-$body = @{ apiKey = "YOUR_GEMINI_API_KEY" } | ConvertTo-Json
-Invoke-RestMethod -Uri "http://localhost:3000/api/v1/settings/model-providers/google-gemini" -Method Put -Body $body -ContentType "application/json"
-```
-
-**macOS / Linux:**
-```bash
-curl -X PUT "http://localhost:3000/api/v1/settings/model-providers/google-gemini" \
-     -H "Content-Type: application/json" \
-     -d '{"apiKey": "YOUR_GEMINI_API_KEY"}'
-```
-
----
-
-## 🎮 How to Test & Demo the 3 Core Tasks
-
-### Task 1: Mode 1 Inline Edit (`Ctrl+K`)
-1. Open any source file in VS Code (e.g. Python, TypeScript, JavaScript).
-2. Highlight a function or a block of lines.
-3. Press **`Ctrl+K`** (or **`Cmd+K`** on Mac).
-4. Enter an instruction, for example:
-   ```text
-   Treat values "off" and "n" as false as well, case-insensitively, and update the docstring.
-   ```
-5. Press **Enter**.
-6. The side-by-side diff (`vscode.diff`) will automatically open.
-7. Click **Accept All** on the notification banner to apply the edits bottom-to-top.
-8. To undo at any time, press `Ctrl+Shift+P` &rarr; select **`Forge: Undo Last Agent Change`**.
-
----
-
-### Task 2: Mode 2 Agent Retrieval & Context Ledger
-1. Click the **TrueForge Agent** icon in the VS Code Activity Bar (left sidebar).
-2. In the dropdown, switch the mode to **Agent Mode (Mode 2)**.
-3. Type a query that references specific files or symbols using `@`:
-   ```text
-   How does @file:src/flask/helpers.py interact with @symbol:get_debug_flag?
-   ```
-4. Press **`Ctrl+Enter`** (or click **Send**).
-5. Notice the **Context Ledger** progress bar fill up with token metrics, and view pinned context slices and Table of Contents (TOC) overflow entries.
-
----
-
-### Task B: Agent Mode (Three or More Files, None Named)
-Run the complete multi-file specification benchmark without mentioning any file names:
-
-1. In the **TrueForge Agent** sidebar panel, select **Agent Mode (Mode 2)**.
-2. Submit this exact instruction:
-   ```text
-   Add a new built-in CLI command flask config that prints the loaded application's configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as '***'. It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands.
-   ```
-3. **Multi-File Diff Verification**:
-   The agent automatically discovers and touches **three files**:
-   - `src/flask/cli.py` (registers `config` on `FlaskGroup` with case-insensitive regex masking)
-   - `tests/test_cli.py` (adds `TestConfig` asserting exit code 0 and sensitive key masking)
-   - `docs/cli.rst` (documents `flask config` alongside `run`, `shell`, and `routes`)
-4. **Accept and Run Tests**:
-   - Click **Accept All** to apply changes.
-   - Run the test suite:
-     ```bash
-     pytest tests/test_cli.py -q
-     # Output: 56 passed, 3 skipped in 0.24s
-     ```
-5. **Verify Live Masked JSON**:
-   ```bash
-   flask --app demo_app config
-   ```
-   All keys containing `SECRET`, `PASSWORD`, `TOKEN`, or `KEY` will be output as `"***"`, while normal application configuration parameters remain fully intact.
-
----
-
-### Task 3: Streaming & Cancellation
-1. In the TrueForge sidebar panel, ask a question that produces a long answer:
-   ```text
-   Write an exhaustive 5-page guide explaining the entire WSGI request-response lifecycle of Flask.
-   ```
-2. Press **`Ctrl+Enter`**.
-3. **Observe Streaming**: Watch the code and text stream character-by-character in real time in the Agent Stream box.
-4. **Test Cancellation**: While it is generating, press **`Escape`** or click the red **Stop** button.
-5. The stream halts immediately, the socket connection terminates, and a notification confirms:
-   > `TrueForge generation cancelled.`
-
----
-
-## 🛠️ Building & Testing From Source
-
-If you want to modify the TypeScript code or run tests:
+### 4. Build & Test Commands
 
 ```bash
-# 1. Install dependencies
-npm install
-
-# 2. Run automated test suites (13/13 passing)
-npm test
-
-# 3. Build bundle with esbuild
+# Build extension host, stdio bridge, and webview
 npm run build
 
-# 4. Package a new .vsix
-npx vsce package --no-dependencies --allow-missing-repository
+# Type-check TypeScript codebase
+npm run typecheck
+
+# Run automated test suites (including Task A E2E simulation)
+npm test
+
+# Package to VSIX
+npm run package
 ```
 
 ---
 
-## 📁 Repository Structure
+## Task A Verification (Flask 3.1.3 Inline Edit)
 
-```text
-├── forge-vscode-agent-1.0.0.vsix   # Pre-built extension binary (ready to install)
-├── SPECIFICATION.md                # Full technical specification & architecture
-├── README.md                       # This setup guide
-├── package.json                    # Extension manifest & command bindings
-├── esbuild.config.mjs              # Fast bundler config
-├── start-server.cmd                # TrueForge server launcher (Windows)
-├── start-server.sh                 # TrueForge server launcher (macOS/Linux)
-├── config.example.yaml             # Example model routing config
-├── src/
-│   ├── extension.ts                # Main extension activation & command routing
-│   ├── context/
-│   │   ├── ledgerTracker.ts        # Token ledger, budget manager & TOC overflow
-│   │   └── retriever.ts            # BM25 lexical & AST workspace symbol retriever
-│   ├── diff/
-│   │   ├── hunks.ts                # Hunk decomposition algorithm
-│   │   ├── stagingBuffer.ts        # Review queue & approval coordinator
-│   │   └── workspaceApplier.ts     # Bottom-to-top safe line edit applier
-│   ├── trueforge/
-│   │   ├── client.ts               # REST & SSE communication with TrueForge
-│   │   ├── configValidator.ts      # Health checks & pre-flight diagnostics
-│   │   ├── modelSwitcher.ts        # QuickPick interactive model selector
-│   │   ├── resilience.ts           # 5s watchdog, retry backoff & model failover
-│   │   └── streamHandler.ts        # SSE stream generator & AbortController
-│   ├── undo/
-│   │   └── undoStack.ts            # Checkpoint snapshots & turn-level rollback
-│   └── webview/
-│       ├── panelProvider.ts        # Modern glassmorphic Webview provider
-│       └── ui/index.ts             # Sidebar UI frontend logic & shortcuts
-└── tests/
-    ├── all_tasks_verification.test.mjs # Unified test covering Tasks 1, 2, and 3
-    ├── mvp.test.mjs                    # Unit tests for contracts, streaming & resilience
-    └── task_a_e2e.test.mjs             # E2E Flask 3.1.3 inline edit test
-```
+To verify Task A manually:
+1. Clone Flask:
+   ```bash
+   git clone https://github.com/pallets/flask
+   cd flask && git checkout 3.1.3
+   ```
+2. Open `src/flask/helpers.py` in VS Code.
+3. Highlight the `get_debug_flag` function.
+4. Press `Ctrl+K` (or `Cmd+K` on macOS) to open the TrueForge Inline Edit prompt.
+5. Enter:
+   > "Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false."
+6. **Verify the Diff Pipeline**:
+   - Red line highlights (`rgba(248, 81, 73, 0.18)`) appear over modified blocks.
+   - Per-hunk CodeLens appears:
+     - `$(check) Accept Hunk (#1: Update docstring...)`
+     - `$(check) Accept Hunk (#2: Add 'off' and 'n'...)`
+     - `$(diff) Side-by-Side Diff`
+     - `$(pass) LSP: 0 errors`
+   - Click **Accept Hunk** to apply changes.
+   - Press `Ctrl+Z` to verify native editor undo.
+   - Execute command `Forge: Undo Last Agent Change` (`trueforge.undoLastTurn`) to verify full turn rollback.
 
 ---
 
-## 📜 License
-MIT License. Built for use with Google Antigravity and TrueForge.
+## Embedded MCP Tools
+
+The extension starts an embedded MCP server on an ephemeral port (`127.0.0.1:0`), recorded in `.vscode/trueforge-mcp.json`:
+
+| Tool | Description |
+|------|-------------|
+| `workspace_tree` | Recursive directory tree with `.gitignore` filtering and line counts |
+| `workspace_search` | Workspace-wide text search |
+| `list_symbols` | LSP document/workspace symbol discovery |
+| `read_file_range` | Read 1-indexed lines (max 250 lines, dirty-buffer aware) |
+| `get_diagnostics` | LSP error/warning diagnostics |
+| `propose_file_edit` | Stage hunks for human review (zero direct disk write) |
+| `create_file` | Stage new file creation |
+| `delete_file` | Stage file deletion |
+| `run_terminal_cmd` | Shell execution with timeout protection |
+
+---
+
+## License
+
+Apache-2.0 — See [LICENSE](./LICENSE)

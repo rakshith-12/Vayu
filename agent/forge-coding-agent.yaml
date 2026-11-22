@@ -3,7 +3,7 @@ description: Editor-native VS Code coding agent powered by TrueForge
 
 model:
   primary: google-gemini/gemini-3-5-flash-lite
-  fallback: google-gemini/gemini-3-1-flash-lite
+  fallback: openrouter/nemotron-3-ultra-free
 
 retry:
   max_attempts: 2

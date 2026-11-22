@@ -20,7 +20,8 @@ export class ModelSwitcher {
     this.activeModel =
       initialModel ||
       config.get<string>('primaryModel') ||
-      'primary-coding-model';
+      'google-gemini/gemini-3-5-flash-lite';
+    this.client.setActiveModel(this.activeModel);
   }
 
   getActiveModel(): string {
@@ -30,6 +31,7 @@ export class ModelSwitcher {
   setActiveModel(modelId: string): void {
     if (this.activeModel !== modelId) {
       this.activeModel = modelId;
+      this.client.setActiveModel(modelId);
       this.onDidChangeModelEmitter.fire(modelId);
 
       // Persist to user settings
@@ -49,15 +51,17 @@ export class ModelSwitcher {
       models = await this.client.listModels();
     } catch {
       models = [
-        { id: 'primary-coding-model', name: 'Primary Coding Model' },
-        { id: 'secondary-fallback-model', name: 'Secondary Fallback Model' },
+        { id: 'google-gemini/gemini-3-5-flash-lite', name: 'Gemini 3.5 Flash-Lite' },
+        { id: 'openrouter/nemotron-3-ultra-free', name: 'Nemotron 3 Ultra (Free)' },
+        { id: 'google-gemini/gemini-3-1-flash-lite', name: 'Gemini 3.1 Flash-Lite' },
       ];
     }
 
     if (models.length === 0) {
       models = [
-        { id: 'primary-coding-model', name: 'Primary Coding Model' },
-        { id: 'secondary-fallback-model', name: 'Secondary Fallback Model' },
+        { id: 'google-gemini/gemini-3-5-flash-lite', name: 'Gemini 3.5 Flash-Lite' },
+        { id: 'openrouter/nemotron-3-ultra-free', name: 'Nemotron 3 Ultra (Free)' },
+        { id: 'google-gemini/gemini-3-1-flash-lite', name: 'Gemini 3.1 Flash-Lite' },
       ];
     }
 

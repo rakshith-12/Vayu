@@ -342,15 +342,12 @@ export type WebviewToHostMessage =
   | { type: 'user:promote_toc'; tocEntryId: string }
   | { type: 'user:reveal_hunk'; filePath: string; line: number }
   | { type: 'user:query_mentions'; prefix: string }
-  | { type: 'user:switch_model' }
+  | { type: 'user:switch_model'; modelId?: string }
   | { type: 'user:refresh_status' };
 
 /**
  * Union of all messages the extension host can send to the webview
  * via `webview.postMessage`.
- *
- * 6 message types: ledger:updated, stream:event, diff:queue_updated,
- * stream:text_delta, mentions:results, status:updated.
  */
 export type HostToWebviewMessage =
   | { type: 'ledger:updated'; ledger: ContextLedgerSnapshot }
@@ -361,9 +358,10 @@ export type HostToWebviewMessage =
   | {
       type: 'status:updated';
       serverOnline: boolean;
+      serverUrl: string;
       modelOnline: boolean;
       activeModel: string;
-      serverUrl?: string;
+      availableModels: Array<{ id: string; name: string }>;
     };
 
 // ─────────────────────────────────────────────────────────────────────────────

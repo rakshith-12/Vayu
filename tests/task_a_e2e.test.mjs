@@ -180,3 +180,86 @@ test('Task A E2E: Flask 3.1.3 inline edit staging, acceptance, and turn rollback
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('WorkspaceApplier preserves Python indentation on CRLF documents with LF hunks', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-crlf-indent-'));
+  const pyPath = path.join(tmpDir, 'helpers.py');
+
+  // File on Windows with CRLF line endings
+  const crlfFile = [
+    'import os',
+    '',
+    'def get_debug_flag() -> bool:',
+    '    """Get whether debug mode should be enabled.',
+    '    Default is False.',
+    '    """',
+    '    val = os.environ.get("FLASK_DEBUG")',
+    '    return val.lower() not in {"0", "false", "no"}',
+  ].join('\r\n');
+
+  fs.writeFileSync(pyPath, crlfFile, 'utf8');
+
+  try {
+    const { WorkspaceApplier } = await import('../src/diff/workspaceApplier');
+
+    // Hunks with LF line endings and no leading indent on first line of docstring
+    const hunk1 = {
+      id: 'hunk-doc',
+      fileId: 'file-1',
+      filePath: pyPath,
+      index: 0,
+      oldStart: 4,
+      oldLines: 3,
+      newStart: 4,
+      newLines: 4,
+      oldText: '"""Get whether debug mode should be enabled.\n    Default is False.\n    """',
+      newText: '"""Get whether debug mode should be enabled.\n    Default is False.\n    The values \'0\', \'false\', \'no\', \'off\', and \'n\' are treated as false.\n    """',
+      rationale: 'Update docstring',
+      status: 'accepted',
+    };
+
+    const hunk2 = {
+      id: 'hunk-logic',
+      fileId: 'file-1',
+      filePath: pyPath,
+      index: 1,
+      oldStart: 8,
+      oldLines: 1,
+      newStart: 9,
+      newLines: 1,
+      oldText: 'return val.lower() not in {"0", "false", "no"}',
+      newText: 'return val.lower() not in {"0", "false", "no", "off", "n"}',
+      rationale: 'Update logic',
+      status: 'accepted',
+    };
+
+    const review = {
+      fileId: 'file-1',
+      turnId: 'turn-1',
+      filePath: pyPath,
+      isNewFile: false,
+      isDeleteFile: false,
+      originalContent: crlfFile,
+      proposedFullContent: '',
+      hunks: [hunk1, hunk2],
+      resolveGate: () => {},
+    };
+
+    const applied = await WorkspaceApplier.applyFileReview(review, [hunk1, hunk2]);
+    assert.strictEqual(applied, true);
+
+    const result = fs.readFileSync(pyPath, 'utf8');
+    const lines = result.split(/\r?\n/);
+
+    // Assert def get_debug_flag() is followed by indented lines!
+    assert.strictEqual(lines[2], 'def get_debug_flag() -> bool:');
+    assert.ok(lines[3].startsWith('    """'), 'Line 4 must have 4 spaces indentation');
+    assert.ok(lines[4].startsWith('    Default'), 'Line 5 must have 4 spaces indentation');
+    assert.ok(lines[5].startsWith('    The values'), 'Line 6 must have 4 spaces indentation');
+    assert.ok(lines[6].startsWith('    """'), 'Line 7 must have 4 spaces indentation');
+    assert.strictEqual(lines[7], '    val = os.environ.get("FLASK_DEBUG")');
+    assert.ok(lines[8].startsWith('    return'), 'Line 9 must have 4 spaces indentation');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

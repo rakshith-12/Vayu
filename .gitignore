@@ -1,6 +1,9 @@
 node_modules/
 dist/*.map
+!dist/webview/index.js.map
+*.vsix
 .vscode/trueforge-mcp.json
+config.yaml
 *.log
 .DS_Store
 Thumbs.db
